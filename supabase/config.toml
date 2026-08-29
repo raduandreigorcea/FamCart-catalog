@@ -1,0 +1,73 @@
+# The catalog project's own Supabase directory.
+#
+# This is a SECOND supabase/ tree in one repository. The one at the repo root
+# describes the app database (households, lists, purchase history); this one
+# describes the product catalog, which is a separate Supabase project in a
+# separate organisation. Nothing in either schema references the other — the
+# only thing crossing the gap is a Clerk session token that both projects
+# accept, and the shape of three RPCs the app calls.
+#
+# Drive it by pointing the CLI here rather than by linking:
+#
+#   npx supabase --workdir catalog db push --linked
+#   npx supabase --workdir catalog test db
+#
+# Keeping them apart matters more than it looks. `supabase link` rewrites
+# supabase/.temp/*, so a CLI shared between the two projects means every catalog
+# command silently repoints the app commands at the wrong database. Two
+# directories, two link states, no way to confuse them.
+project_id = "famcart-catalog"
+
+[db]
+# Deliberately not 54322: `supabase start` at the repo root already owns that
+# port for the app database, and both stacks have to be able to run at once —
+# the pgTAP suites are separate and CI runs them in separate jobs, but a
+# developer checking a cross-project change wants both up.
+#
+# And deliberately not 5433x either. Windows reserves blocks of high ports for
+# Hyper-V, and on this machine 54289-54488 is one of them; Docker fails to bind
+# with "an attempt was made to access a socket in a way forbidden by its access
+# permissions", which reads like a permissions problem and is a port-range one.
+# `netsh int ipv4 show excludedportrange protocol=tcp` lists the blocks. 5452x
+# sits in the gap above them.
+port = 54522
+major_version = 17
+
+[api]
+port = 54521
+schemas = ["public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[studio]
+enabled = false
+
+[analytics]
+# Off, so the stack does not need a second set of ports for Logflare and Vector.
+# The catalog has no logs worth a dashboard; what it needs is a database and
+# PostgREST.
+enabled = false
+
+[auth]
+# On, and only because the local stack will not start PostgREST without it —
+# Kong and GoTrue come up together, and with auth off `supabase start` brings up
+# the database alone, which leaves the seed script and every REST-level check
+# with nothing to talk to.
+#
+# It says nothing about the deployed project. Authentication there is Clerk's,
+# reaching Postgres through Supabase's Third-Party Auth integration, which is
+# configured in the Supabase dashboard and referenced nowhere in this
+# repository. Nothing in this file is applied to the hosted project.
+enabled = true
+
+[inbucket]
+# The local mail catcher, off. Nothing here sends email, and its default port
+# (54324) is inside the Hyper-V reserved block this file already works around
+# for the database.
+enabled = false
+
+[realtime]
+enabled = false
+
+[storage]
+enabled = false

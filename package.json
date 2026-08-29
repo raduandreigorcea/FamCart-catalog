@@ -1,0 +1,21 @@
+{
+  "name": "famcart-catalog",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The FamCart product catalog: schema, curated seed, and on-demand discovery.",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p . --noEmit",
+    "db:reset": "supabase db reset",
+    "db:test": "supabase db reset && supabase test db",
+    "seed": "node scripts/seed.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  }
+}

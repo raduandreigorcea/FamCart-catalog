@@ -1,0 +1,59 @@
+{
+  // Separate from the root tsconfig because this code has a different runtime.
+  //
+  // This repo has no bundler and no browser. What it has is one body of
+  // TypeScript imported by three runtimes at once, which is what every choice
+  // below is about.
+  //
+  // WHY THE CORE LIVES UNDER supabase/functions/_shared RATHER THAN catalog/src.
+  // A Supabase edge function may only import files inside supabase/functions —
+  // the CLI uploads that directory and nothing above it — so a discovery
+  // function importing `../../../src/discover.ts` type-checks locally and fails
+  // to deploy. `_shared` is Supabase's own convention for exactly this, and
+  // putting the modules there means the code the function runs is the code the
+  // tests run, with no copy step to forget.
+  //
+  // It is imported three ways and has to satisfy all of them at once:
+  //
+  //   * by Node, from catalog/scripts/seed.mjs, using Node 22+'s native type
+  //     stripping — which requires the import specifier to carry the .ts
+  //     extension, hence allowImportingTsExtensions;
+  //   * by Deno, from the discovery edge function, which requires the same;
+  //   * by vitest, from test/catalog/, which does not care either way.
+  //
+  // "moduleResolution": "nodenext" is what makes the explicit extensions legal
+  // rather than an error. The root config uses "bundler", where they are not.
+  //
+  // Run it with: npm run typecheck
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "WebWorker"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "allowImportingTsExtensions": true,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "resolveJsonModule": true,
+    // WebWorker RATHER THAN DOM, and the difference is the point. This code
+    // needs `fetch`, `Response`, `AbortSignal` and `setTimeout` — web-standard
+    // globals that Node, Deno and the browser all have, and that the ES2022 lib
+    // alone does not declare. DOM would declare them too, and would also declare
+    // `document`, `window` and `localStorage`, which would let a browser-only
+    // reference compile in code that runs inside an edge function and a Node
+    // script. WebWorker is the platform surface these three runtimes actually
+    // share.
+    "types": []
+  },
+  // _shared ONLY, deliberately. The function entrypoints next to it are Deno
+  // programs: they use `Deno.serve`, the `Deno` namespace and `jsr:` specifiers,
+  // none of which tsc can resolve, and pointing it at them produces a page of
+  // "Cannot find name 'Deno'" that says nothing about the code. Deno type-checks
+  // those at deploy time, which is the runtime that will actually run them.
+  //
+  // _shared is the part that has to satisfy three runtimes at once, so it is the
+  // part worth checking here.
+  "include": ["supabase/functions/_shared/**/*.ts"]
+}

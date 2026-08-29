@@ -1,0 +1,15 @@
+node_modules/
+
+# Local state written by `supabase start`/`db reset`. It records which project
+# the CLI is linked to, so leaving it tracked means every `supabase link`
+# dirties the working tree.
+supabase/.branches
+supabase/.temp
+
+# Service-role credentials. Never commit these: the key bypasses every RLS
+# policy in the project.
+.env*
+!.env.example
+
+dist/
+*.log
