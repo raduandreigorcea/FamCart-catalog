@@ -1,0 +1,46 @@
+name: CI
+
+# This repo owns a database, so most of what is worth testing is SQL. The pgTAP
+# suites are the primary check and the vitest ones cover the framework-free core
+# that Node, Deno and the tests all import.
+#
+# The app repo runs the pgTAP suite too, against this repo as a submodule. That
+# is deliberate duplication: the dependency runs the other way from the
+# ownership, because src/lib/productSuggestions.ts calls search_catalog() and
+# reads its columns back, so a change here breaks the app with nothing in the
+# app to warn anyone.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  core:
+    name: Typecheck and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  schema:
+    name: Schema tests (pgTAP)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - run: supabase db start
+      # `db start` restores from a local backup where one exists and SKIPS the
+      # migrations, so the suite would run against whatever the backup held.
+      # A cold runner has no backup, but a developer's machine does, and the two
+      # must test the same thing. `db reset` rebuilds unconditionally.
+      - run: supabase db reset
+      - run: supabase test db
