@@ -69,6 +69,13 @@ as $$
     'blob_only',      10,  -- matched through a category name and nothing else
     'fuzzy',           5,  -- nothing matched at all; this is the closest thing
 
+    -- Reach rather than precision: this row belongs to the concept the query
+    -- named, but its own name matched nothing. Below every rung that means the
+    -- product was actually named, above the one that means it merely sits on
+    -- the right shelf. See the rungs CTE in search_catalog for why it cannot go
+    -- higher without breaking generic concepts.
+    'concept',        45,
+
     -- The bonuses. Sum to at most 9, which is less than 10 on purpose.
     'market_hit',      4,  -- sold where the searcher is
     'market_unknown',  2,  -- nobody has said where it is sold; not the same as "nowhere"
@@ -89,16 +96,49 @@ grant execute on function public.catalog_search_weights() to authenticated;
 -- query means calling catalog_normalize(), and EXECUTE on that is revoked from
 -- every client role because a client that can compute the merge key can craft a
 -- name that collides with an existing product's. Definer keeps the fold inside
--- the database.
+-- the database, and it is also what lets this call catalog_concept_resolve().
 --
 -- The cost of definer is that RLS does not run inside the body. That costs
 -- nothing here: every row in this catalog is readable by every signed-in user,
 -- so there is no row-level decision to lose. It would matter a great deal in the
 -- app database, where the same function is scoped to a household.
--- Dropped first because the argument list changes, and `create or replace`
--- cannot add a parameter. A four-argument call still binds to this: PostgREST
--- resolves an RPC by the argument names in the body, so the app is unaffected.
+--
+-- ─── what the concept layer changed, and what it did not ─────────────────────
+--
+-- The ladder above is untouched. What 007 added is a question asked BEFORE the
+-- ladder runs — "what does this word mean?" — and two consequences that follow
+-- from the answer:
+--
+--   1. REACH. A product attributed to the resolved concept is relevant even
+--      when its name contains none of the query. `Borsec 2L` is a water and
+--      does not contain the string "apa" anywhere, so no amount of substring
+--      matching will ever find it; concept membership is the only thing that
+--      can. That is why the rung exists.
+--
+--   2. ORDER, for BRANDED concepts only. Somebody typing `apa`, `deodorant` or
+--      `detergent` is choosing among commercial products, and a generic row is
+--      a placeholder that answers nothing — a list saying "Apă" makes whoever
+--      is holding it guess. So under a branded concept a generic row sinks
+--      below every commercial one. It is never hidden, because the rule this
+--      whole file is built around is that the dropdown must not go empty.
+--
+-- INTENT IS A SEPARATE SORT KEY, NOT POINTS, and that is deliberate. The
+-- bonuses below are all smaller than the gap between two rungs, on purpose, so
+-- that a nearby readable row can never overtake a better match. Intent has to
+-- do exactly what the bonuses may not: the generic `Apă` matches an alias
+-- exactly and scores 90, while `Apa Plata 2L` merely prefix-matches and scores
+-- 80. Expressing "generic loses here" as points would mean a demotion larger
+-- than a rung, which would corrupt the one invariant the ladder has. So it sits
+-- outside the score, as the first ORDER BY key, where it is also far easier to
+-- explain: two lists, commercial first, each internally ranked as always.
+--
+-- Dropped first because both the argument list and the return shape change, and
+-- `create or replace` can do neither. A four-argument call still binds to this:
+-- PostgREST resolves an RPC by the argument names in the body, so the app is
+-- unaffected by the new columns and can project the three it wants with
+-- `select=`.
 drop function if exists public.search_catalog(text, integer, text[], text[]);
+drop function if exists public.search_catalog(text, integer, text[], text[], boolean);
 
 create or replace function public.search_catalog(
   p_query   text,
@@ -107,7 +147,35 @@ create or replace function public.search_catalog(
   p_langs   text[] default null,
   p_fuzzy   boolean default false
 )
-returns table (name text, maker text, popularity integer)
+returns table (
+  name       text,
+  maker      text,
+  popularity integer,
+  -- ─── why the result explains itself ────────────────────────────────────────
+  -- Ranking bugs in this file do not look like bugs. They look like a catalog
+  -- that does not stock something: `apa` returning onions read as bad data for
+  -- weeks, and `beer` returning strawberries was written down as a curiosity
+  -- rather than recognised as the same bug. Both were immediately obvious the
+  -- moment the rung was visible.
+  --
+  -- Always populated rather than gated behind a flag, because a debug path that
+  -- runs a different query from the real one is a debug path that lies. These
+  -- are all computed by the ranking anyway; the client projects the three
+  -- columns it wants with PostgREST's `select=` and pays nothing for the rest.
+  match_type      text,
+  matched_concept text,
+  -- The intent, handed back so the CLIENT can decide whether discovery is worth
+  -- asking for at all. Without it `cartofi` costs an edge-function round trip
+  -- that can only ever answer "a generic concept is already answered" -- no
+  -- external call, but a cold start and a wait, on the commonest kind of query
+  -- there is. One column removes it.
+  concept_intent  text,
+  matched_alias   text,
+  category_match  boolean,
+  language_match  boolean,
+  market_match    boolean,
+  relevance_score integer
+)
 language plpgsql
 security definer
 stable
@@ -131,7 +199,40 @@ declare
   v_primary text;
   v_rest    text[];
   v_prefix  text;
+  v_word_pats text[];
   v_lang    text := nullif(p_langs[1], '');
+
+  -- What the word MEANS, and whether the bare word is buyable. Null for most
+  -- queries — a brand, a package size, a product nobody has named — and a null
+  -- concept costs nothing: every branch below falls back to exactly the
+  -- behaviour this function had before 007.
+  v_concept uuid;
+  v_intent  text;
+  v_slug    text;
+
+  -- ─── the short-token rule ──────────────────────────────────────────────────
+  -- At or below this length, a token must match at the START OF A WORD. Above
+  -- it, a match anywhere in the blob still counts.
+  --
+  -- WHY A LENGTH AND NOT A BLANKET RULE. `search_blob` holds every alias in six
+  -- languages, which makes a short query astonishingly likely to land in the
+  -- middle of an unrelated word. Searching "apa" (water) returned potatoes and
+  -- onions in production, and both were correct substring matches:
+  --
+  --     Potatoes -> potatoes cartofi ... p-APA-s patatas patate
+  --     Onions   -> onions ce-APA cebollas cipolle ...
+  --     razors   -> APA-rate de ras de unica folosinta gillette
+  --
+  -- It is the same coincidence as `beer` finding Erd-BEER-en and Heidel-BEER-en,
+  -- which was documented as a curiosity and is really this bug. Four characters
+  -- catches both.
+  --
+  -- Above four, a mid-word match is usually the point rather than an accident:
+  -- German compounds are the clear case, where "wasser" has to keep reaching
+  -- Mineral-WASSER and Sprudel-WASSER, and "detergent" reaching a longer product
+  -- name is what anyone would expect. So the rule is deliberately narrow — it
+  -- fixes the queries that produce garbage and leaves the rest alone.
+  short_token constant integer := 4;
 begin
   -- Fold the query exactly as the stored names were folded, so "Apă" and "apa"
   -- are one search. There is one authority for that fold and this is a caller
@@ -139,6 +240,15 @@ begin
   v_query := public.catalog_normalize(coalesce(p_query, ''), null);
   if v_query = '' then
     return;
+  end if;
+
+  -- What does this word mean? Exact match only — see catalog_concept_resolve()
+  -- for why a fuzzy resolution would be worse than none.
+  v_concept := public.catalog_concept_resolve(p_query, v_lang);
+  if v_concept is not null then
+    select c.intent, c.slug into v_intent, v_slug
+      from public.catalog_concepts c
+     where c.id = v_concept;
   end if;
 
   -- Escaping matters even after folding. catalog_normalize lowercases and strips
@@ -168,6 +278,25 @@ begin
   v_rest    := v_patterns[2:];
   v_prefix  := replace(replace(replace(v_query, '\', '\\'), '%', '\%'), '_', '\_') || '%';
 
+  -- One pattern per SHORT token, anchored to the start of a word.
+  --
+  -- No regex: search_blob is space-separated folded text, so "starts a word" is
+  -- exactly "preceded by a space" once a leading space is prepended to the blob
+  -- below. That reuses the LIKE escaping established above rather than
+  -- introducing a second escaping language whose metacharacters differ — a
+  -- folded quantity like "0.5l" carries a dot that means "any character" in a
+  -- regex and nothing at all in a LIKE.
+  select array_agg(
+           '% ' || replace(replace(replace(tok, '\', '\\'), '%', '\%'), '_', '\_') || '%'
+         )
+    into v_word_pats
+  from (
+    select tok
+    from regexp_split_to_table(v_query, '\s+') as tok
+    where tok <> '' and char_length(tok) <= short_token
+    limit max_tokens
+  ) t;
+
   return query
   with candidates as (
     -- Exact matches first and WITHOUT the cap. A product whose name is exactly
@@ -179,11 +308,24 @@ begin
     union
     select a.product_id from public.catalog_aliases a where a.normalized_alias = v_query
     union
+    -- Members of the resolved concept. This is REACH rather than precision: it
+    -- is the only way a product whose name contains none of the query can be
+    -- found at all. Capped like the blob branch and for the same reason.
+    (
+      select p.id
+      from public.catalog_products p
+      where v_concept is not null and p.concept_id = v_concept
+      order by p.popularity desc
+      limit max_candidates
+    )
+    union
     (
       select p.id
       from public.catalog_products p
       where p.search_blob like v_primary
         and p.search_blob like all (v_rest)
+        -- Null when every token was long enough to be trusted anywhere.
+        and (v_word_pats is null or (' ' || p.search_blob) like all (v_word_pats))
       order by p.popularity desc
       limit max_candidates
     )
@@ -196,6 +338,47 @@ begin
       p.popularity,
       p.markets,
       p.quality_tier,
+      p.product_type,
+      (p.concept_id is not null and p.concept_id = v_concept) as in_concept,
+      -- ─── intent, as its own sort key ──────────────────────────────────────
+      -- Only 'branded' moves anything, and only generic rows. A generic concept
+      -- leaves the ladder alone (nobody typing `morcovi` wants a brand), and so
+      -- does a mixed one (`lapte` should return both, ordered by how well they
+      -- matched). One rule, one direction, and every other query behaves
+      -- exactly as it did before this file knew what a concept was.
+      (case
+         when v_concept is null then 0
+         -- ─── a row nobody can shop from sinks to the bottom ───────────────
+         --
+         -- A COMMERCIAL row whose entire name is the concept's own word and
+         -- which carries no brand at all. Open Food Facts is full of these --
+         -- a barcode, the word "Pâine", and nothing else -- and they are the
+         -- worst rows in the catalog in the position that matters most,
+         -- because `name_exact` scores 100 and beats every real product.
+         --
+         -- Searching "paine" put five of them above `Pâine albă feliată` by
+         -- Dobrogea. They are not merely unhelpful: they are indistinguishable
+         -- from the generic concept while claiming to be a product, so the
+         -- dropdown shows the same word four times and the person cannot tell
+         -- which one to pick.
+         --
+         -- THE NAME TEST IS WHAT MAKES THIS SAFE. "brand is null" alone would
+         -- also demote `Cartofi Albi 2.5kg` and `Oua Marimea M 10 buc`, which
+         -- are curated rows carrying a real package size and no maker. Only a
+         -- name that is EXACTLY one of the concept's own words qualifies.
+         when p.product_type = 'commercial'
+              and p.brand is null
+              and exists (
+                select 1 from public.catalog_concept_terms t
+                 where t.concept_id = v_concept
+                   and t.normalized_term = p.normalized_name
+              ) then 2
+         -- The generic placeholder under a branded concept. Below real
+         -- products, but above the commercial duplicates of itself: at least
+         -- this one is honestly a concept and carries six languages.
+         when v_intent = 'branded' and p.product_type = 'generic' then 1
+         else 0
+       end) as intent_rank,
       -- The name without the brand. normalized_name has the brand folded into
       -- it (it is the merge key), so "pepsi zero 500ml" would never equal
       -- "pepsi zero 500ml pepsi" and an exact search for a product's own name
@@ -206,6 +389,8 @@ begin
       al.alias_prefix,
       al.alias_tokens,
       al.reads_it,
+      al.hit_alias,
+      coalesce(al.cat_hit, false) as cat_hit,
       -- CAN THIS PERSON READ THIS PRODUCT'S NAME? Two ways to qualify: the name
       -- is natively in their language (a Romanian shop line), or the product
       -- carries an explicit name in it (a generic concept, translated six ways).
@@ -226,6 +411,22 @@ begin
         bool_or(a.alias_type in ('name', 'synonym')
                 and a.normalized_alias like v_primary
                 and a.normalized_alias like all (v_rest))                                 as alias_tokens,
+        -- Reached through a category name. Reported rather than scored: it is
+        -- the difference between "this product is a drink" and "this product is
+        -- called that", and confusing the two is what once returned Eggs for a
+        -- search for milk.
+        bool_or(a.alias_type = 'category'
+                and a.normalized_alias like v_primary
+                and a.normalized_alias like all (v_rest))                                 as cat_hit,
+        -- Which string actually did it, for the explanation. Exact first, then
+        -- prefix, so the reported alias is the strongest one rather than
+        -- whichever the planner reached first.
+        coalesce(
+          (array_agg(a.alias) filter (
+            where a.alias_type in ('name', 'synonym') and a.normalized_alias = v_query))[1],
+          (array_agg(a.alias) filter (
+            where a.alias_type in ('name', 'synonym') and a.normalized_alias like v_prefix))[1]
+        )                                                                                 as hit_alias,
         -- Language relevance: does this product have a name the searcher reads?
         bool_or(a.alias_type = 'name' and a.lang = v_lang)                                as reads_it
       from public.catalog_aliases a
@@ -238,30 +439,50 @@ begin
       limit 1
     ) loc on true
   ),
+  rungs as (
+    -- ─── which rung, named ────────────────────────────────────────────────
+    -- The rung is chosen as a LABEL and the score is looked up from it, rather
+    -- than the two being computed separately. That is what makes the reported
+    -- match_type and the number it sorts by incapable of disagreeing — an
+    -- explanation that can drift from the ranking is worse than no explanation,
+    -- because it is believed.
+    select
+      f.*,
+      case
+        when f.name_only = v_query or f.name_only || ' ' || coalesce(f.brand_only, '') = v_query
+          then 'name_exact'
+        when f.alias_exact                                   then 'alias_exact'
+        when f.name_only like v_prefix                       then 'name_prefix'
+        when f.alias_prefix                                  then 'alias_prefix'
+        when f.name_only like v_primary
+             and f.name_only like all (v_rest)               then 'name_tokens'
+        when f.brand_only is not null
+             and (f.brand_only = v_query
+                  or f.brand_only like v_prefix)             then 'brand_match'
+        when f.alias_tokens                                  then 'alias_tokens'
+        -- ─── concept membership sits LOW, and deliberately ────────────────
+        -- It is reach, not precision. Every rung above it means the product was
+        -- actually NAMED by what was typed; this one means only that it belongs
+        -- to the right idea. Placed any higher, an attributed water would
+        -- outrank a product whose own name matched the query — and for a
+        -- GENERIC concept it would push the generic row (which is the correct
+        -- answer to `morcovi`) below a commercial one. Above blob_only because
+        -- "this IS a water" beats "this is filed under drinks".
+        when f.in_concept                                    then 'concept'
+        -- Reached through a category name and nothing else. Still returned —
+        -- a shelf query is a real query — but never above a product that was
+        -- actually named.
+        else 'blob_only'
+      end as match_type
+    from facts f
+  ),
   scored as (
     select
-      f.display_name,
-      f.brand,
-      f.popularity,
-      f.readable,
+      r.*,
+      (r.markets && p_markets)                              as market_hit,
+      (v_lang is not null and coalesce(r.reads_it, false))  as lang_hit,
       (
-        case
-          when f.name_only = v_query or f.name_only || ' ' || coalesce(f.brand_only, '') = v_query
-            then (w->>'name_exact')::int
-          when f.alias_exact                                   then (w->>'alias_exact')::int
-          when f.name_only like v_prefix                       then (w->>'name_prefix')::int
-          when f.alias_prefix                                  then (w->>'alias_prefix')::int
-          when f.name_only like v_primary
-               and f.name_only like all (v_rest)               then (w->>'name_tokens')::int
-          when f.brand_only is not null
-               and (f.brand_only = v_query
-                    or f.brand_only like v_prefix)             then (w->>'brand_match')::int
-          when f.alias_tokens                                  then (w->>'alias_tokens')::int
-          -- Reached through a category name and nothing else. Still returned —
-          -- a shelf query is a real query — but never above a product that was
-          -- actually named.
-          else (w->>'blob_only')::int
-        end
+        (w ->> r.match_type)::int
         +
         -- MARKET DEMOTES, IT NEVER FILTERS. A hard filter would give a household
         -- in a thin market an empty dropdown indistinguishable from "we have
@@ -271,20 +492,20 @@ begin
         -- and is not evidence that the product is unavailable.
         case
           when p_markets is null or cardinality(p_markets) = 0 then 0
-          when f.markets && p_markets                          then (w->>'market_hit')::int
-          when cardinality(f.markets) = 0                      then (w->>'market_unknown')::int
+          when r.markets && p_markets                          then (w->>'market_hit')::int
+          when cardinality(r.markets) = 0                      then (w->>'market_unknown')::int
           else 0
         end
         +
-        case when v_lang is not null and f.reads_it then (w->>'lang_hit')::int else 0 end
+        case when v_lang is not null and r.reads_it then (w->>'lang_hit')::int else 0 end
         +
-        case f.quality_tier
+        case r.quality_tier
           when 'A' then (w->>'tier_a')::int
           when 'B' then (w->>'tier_b')::int
           else 0
         end
       ) as score
-    from facts f
+    from rungs r
   )
   -- ─── language FILTERS, where market only demotes ─────────────────────────
   --
@@ -310,13 +531,32 @@ begin
   -- ANY match was readable -- not whether any survived the limit -- so the
   -- fallback triggers on "we have nothing you can read for this word", which is
   -- precisely when a foreign name beats an empty list.
-  select s.display_name, s.brand, s.popularity
+  select
+    s.display_name,
+    s.brand,
+    s.popularity,
+    s.match_type,
+    v_slug,
+    v_intent,
+    s.hit_alias,
+    s.cat_hit,
+    coalesce(s.lang_hit, false),
+    coalesce(s.market_hit, false),
+    s.score
   from scored s
-  where s.readable or not exists (select 1 from scored r where r.readable)
-  -- Popularity is the TIE-BREAK, not part of the score. §23: it must never
-  -- override exact relevance, and folded into the score it would — add_count is
-  -- unbounded and the rungs are ten apart.
-  order by s.score desc, s.popularity desc, s.display_name
+  where s.readable or not exists (select 1 from scored r2 where r2.readable)
+  -- INTENT FIRST. Under a branded concept this splits the result into two
+  -- lists — real products, then the generic placeholder — and inside each the
+  -- order is exactly what it always was. See the header for why this is a sort
+  -- key rather than points.
+  order by
+    s.intent_rank,
+    s.score desc,
+    -- Popularity is the TIE-BREAK, not part of the score. §23: it must never
+    -- override exact relevance, and folded into the score it would — add_count
+    -- is unbounded and the rungs are ten apart.
+    s.popularity desc,
+    s.display_name
   limit v_limit;
 
   -- ─── rung 6: fuzzy, off by default, and LAST ─────────────────────────────
@@ -355,6 +595,11 @@ begin
   -- p_fuzzy is how a caller asks for that last word, and nothing on the
   -- keystroke path asks for it.
   --
+  -- NOTE that the concept layer does not change this and must not. A concept
+  -- resolving tells us the word is real; it says nothing about whether a row
+  -- resembling it is the row that was wanted. `champu` resolves to no concept
+  -- at all, which is exactly the point.
+  --
   -- word_similarity() reads backwards from what you would expect:
   -- word_similarity(query, haystack) asks how well the query resembles some WORD
   -- SEQUENCE inside the haystack, rather than the haystack as a whole. That is
@@ -381,7 +626,15 @@ begin
     select
       coalesce(loc.alias, p.canonical_name),
       p.brand,
-      p.popularity
+      p.popularity,
+      'fuzzy'::text,
+      v_slug,
+      v_intent,
+      null::text,
+      false,
+      false,
+      false,
+      (w->>'fuzzy')::int
     from public.catalog_products p
     left join lateral (
       select a.alias

@@ -8,6 +8,7 @@ import {
 import fixture from './fixtures/fold.json' with { type: 'json' }
 import {
   isLocalSufficient,
+  capFor,
   relevantTo,
   withoutKnown,
   collapse,
@@ -237,14 +238,20 @@ describe('the quality gate', () => {
     expect(judge({ ...good, name: 'aaaaaaa' }).ok).toBe(false)
   })
 
-  it('rejects a commercial product that nothing could identify', () => {
-    expect(judge({ ...good, brand: undefined, gtins: undefined })).toMatchObject({
-      ok: false,
-      reason: 'unidentifiable',
-    })
-    // ...but either one alone is enough.
-    expect(judge({ ...good, gtins: undefined }).ok).toBe(true)
-    expect(judge({ ...good, brand: undefined }).ok).toBe(true)
+  it('requires a discovered commercial product to have BOTH a brand and a barcode', () => {
+    // Either-one-alone was the original reading of S12 and it was measured at
+    // volume: warming to 8,663 rows admitted 637 products with a barcode, a
+    // name, and no maker. A barcode is not an identifier to somebody reading a
+    // shopping list, so those rows are a word and a number.
+    expect(judge({ ...good, brand: undefined })).toMatchObject({ ok: false, reason: 'no-brand' })
+    expect(judge({ ...good, gtins: undefined })).toMatchObject({ ok: false, reason: 'no-barcode' })
+    expect(judge({ ...good }).ok).toBe(true)
+  })
+
+  it('still asks neither of a generic, where having neither is normal', () => {
+    // A banana has no manufacturer and no barcode. Demanding either would
+    // reject the entire curated seed.
+    expect(judge({ ...good, brand: undefined, gtins: undefined }, 'generic').ok).toBe(true)
   })
 
   it('rejects a malformed barcode, because the record carrying it is suspect', () => {
@@ -300,10 +307,34 @@ describe('the quality gate', () => {
 
 describe('deciding whether to ask anyone', () => {
   const rows = [{ name: 'Lapte 1.5% 1L', maker: 'Zuzu', popularity: 40 }]
+  // Enough branded rows to fill a dropdown, which is what "answered" now means.
+  const plenty = Array.from({ length: 6 }, (_, i) => ({
+    name: `Lapte ${i}`, maker: `Marca${i}`, popularity: 10,
+  }))
 
-  it('does not ask when a local row already contains every word typed', () => {
-    expect(isLocalSufficient(rows, 'lapte')).toBe(true)
-    expect(isLocalSufficient(rows, 'lapte zuzu')).toBe(true)
+  it('does not ask when there are enough branded rows to choose from', () => {
+    expect(isLocalSufficient(plenty, 'lapte')).toBe(true)
+  })
+
+  it('still requires every word to match, not just a count', () => {
+    // Six branded rows that are about something else are not an answer.
+    expect(isLocalSufficient(plenty, 'pepsi zero')).toBe(false)
+  })
+
+  it('asks when one thin row is all there is', () => {
+    // THE BUG THIS RULE EXISTS FOR. The old rule stopped here, so a seed row
+    // named "Apă" answered every water search forever and the catalog could
+    // never grow past what it shipped with.
+    expect(isLocalSufficient(rows, 'lapte')).toBe(false)
+    expect(isLocalSufficient(rows, 'lapte zuzu')).toBe(false)
+  })
+
+  it('does not count brandless concepts toward the total', () => {
+    // "Apă", "Apă plată", "Apă minerală" are concepts, not things to buy.
+    const generics = Array.from({ length: 9 }, (_, i) => ({
+      name: `Apa ${i}`, maker: null, popularity: 50,
+    }))
+    expect(isLocalSufficient(generics, 'apa')).toBe(false)
   })
 
   it('asks when the local rows are about something else', () => {
@@ -439,6 +470,24 @@ describe('the pipeline, in order', () => {
     expect(stats.overflow).toBe(12)
   })
 
+  it('lets a one-word browse take more, since it is filling a hole', () => {
+    // "apa" accepted 8 and threw away 15 that had already passed every filter.
+    // A category query is somebody looking to see what there is, and the ninth
+    // product should not cost the next person another round trip.
+    const many = Array.from({ length: 25 }, (_, i) =>
+      off(`Apa plata ${i}`, { brand: `Marca${i}`, gtins: [`222222222222${i % 10}`] }),
+    )
+    const { rows } = pipeline(many, 'apa', [])
+    expect(rows).toHaveLength(20)
+  })
+
+  it('but a named product still stops at eight however empty the catalog is', () => {
+    const many = Array.from({ length: 25 }, (_, i) =>
+      off(`Milka Oreo ${i}`, { brand: `Brand${i}`, gtins: [`333333333333${i % 10}`] }),
+    )
+    expect(pipeline(many, 'milka oreo', []).rows).toHaveLength(8)
+  })
+
   it('keeps the most complete records rather than the first ones', () => {
     const thin = off('Milka Oreo A', { brand: 'Milka' })
     const rich = off('Milka Oreo B', {
@@ -556,5 +605,59 @@ describe('surviving a source that is down (§19)', () => {
       },
     })
     await expect(adapter.search('x', { signal: controller.signal })).resolves.toEqual([])
+  })
+})
+
+describe('intent decides whether anything external is asked at all', () => {
+  const branded = (n) =>
+    Array.from({ length: n }, (_, i) => ({ name: `Apa Plata ${i}L`, maker: `Dorna${i}`, popularity: 1 }))
+
+  it('a GENERIC concept is answered by the bare row, however few there are', () => {
+    // The regression the concept layer exists to fix in this direction.
+    // Potatoes have no brands and never will, so counting branded rows sent
+    // every produce query to an external database that could not possibly
+    // improve on the row already on screen.
+    const rows = [{ name: 'Cartofi', maker: null, popularity: 100 }]
+    expect(isLocalSufficient(rows, 'cartofi')).toBe(false)
+    expect(isLocalSufficient(rows, 'cartofi', { intent: 'generic' })).toBe(true)
+  })
+
+  it('a BRANDED concept is not answered by a generic row, however popular', () => {
+    // And the regression in the other direction: "Apă" contains every word
+    // typed, so the old rule declared the question answered and discovery never
+    // ran for water at all.
+    const rows = [{ name: 'Apă', maker: null, popularity: 10_000 }]
+    expect(isLocalSufficient(rows, 'apa', { intent: 'branded' })).toBe(false)
+  })
+
+  it('a BRANDED concept is answered once there are enough real products', () => {
+    expect(isLocalSufficient(branded(6), 'apa', { intent: 'branded' })).toBe(true)
+    expect(isLocalSufficient(branded(5), 'apa', { intent: 'branded' })).toBe(false)
+  })
+
+  it('a MIXED concept wants real products too; it differs in RANKING, not in asking', () => {
+    const thin = [{ name: 'Lapte', maker: null, popularity: 100 }]
+    expect(isLocalSufficient(thin, 'lapte', { intent: 'mixed' })).toBe(false)
+  })
+
+  it('an unknown word is treated as branded, which is what makes chorizo work', () => {
+    // No concept claims it, so nothing local can be trusted to have answered.
+    expect(isLocalSufficient([], 'chorizo', { intent: null })).toBe(false)
+    expect(isLocalSufficient([{ name: 'Chorizo Iberico', maker: null, popularity: 1 }], 'chorizo'))
+      .toBe(false)
+  })
+
+  it('still refuses to ask about two characters, whatever the intent', () => {
+    // S6: below three characters an external search returns noise proportional
+    // to how common the letters are.
+    expect(isLocalSufficient([], 'ap', { intent: 'branded' })).toBe(true)
+  })
+
+  it('caps a thin generic-concept result at the ordinary eight, not the cold twenty', () => {
+    // capFor asks the same question isLocalSufficient does. A generic concept
+    // that somehow reached the pipeline is not a catalog being filled.
+    const rows = [{ name: 'Cartofi', maker: null, popularity: 100 }]
+    expect(capFor(rows, 'cartofi', 'generic')).toBe(8)
+    expect(capFor(rows, 'cartofi', 'branded')).toBe(20)
   })
 })

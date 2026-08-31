@@ -43,7 +43,12 @@ export type RejectReason =
   | 'name-not-a-name'
   | 'placeholder'
   | 'obsolete'
-  | 'unidentifiable'
+  // 'unidentifiable' was the single reason back when a brand OR a barcode
+  // sufficed. Split in two when the bar rose to require both, because the two
+  // say different things about the record: no brand means nothing to show
+  // somebody reading a list, no barcode means nothing to merge on.
+  | 'no-brand'
+  | 'no-barcode'
   | 'bad-barcode'
 
 /**
@@ -147,14 +152,34 @@ export function judge(
   // if the identifier is wrong, the record it came from is not trustworthy.
   if (product.gtins?.some((g) => !GTIN.test(g))) return { ok: false, reason: 'bad-barcode' }
 
-  // §12: a commercial product needs SOMETHING that identifies it beyond a
-  // string. A brand or a barcode will do; neither is a rejection, because two
-  // different manufacturers' "Chocolate Bar" would collapse onto one row and
-  // whichever arrived second would silently become the other.
+  // ─── a discovered product needs BOTH a brand and a barcode ────────────────
   //
-  // Not applied to generics, where having neither is the normal case.
-  if (type === 'commercial' && !product.brand && !product.gtins?.length) {
-    return { ok: false, reason: 'unidentifiable' }
+  // §12 asks only for SOMETHING that identifies a commercial product beyond a
+  // string, and "a brand or a barcode" was the original reading. Warming the
+  // catalog from 549 rows to 8,663 showed what that admits at volume: 637 rows
+  // with a barcode, a name, and no maker at all. On a shopping list a barcode
+  // is not an identifier -- nobody reads one off a shelf -- so those rows are
+  // a word and a number, and the word is usually one the catalog already has.
+  //
+  // So both, and each rejection is named separately because the two mean
+  // different things about the record:
+  //
+  //   no brand   -- nothing to show under the name. The row cannot help anyone
+  //                 choose, and it collides with the concept it came from.
+  //   no barcode -- nothing to merge on. §15's strong match is a shared GTIN,
+  //                 and without one the row can only ever be deduped by its
+  //                 folded name, which is exactly how two manufacturers'
+  //                 "Chocolate Bar" become one product.
+  //
+  // NOT APPLIED TO GENERICS, where having neither is the normal case: a banana
+  // has no manufacturer and no barcode, and demanding either would reject the
+  // entire curated seed. The seed does not pass through this gate at all, but
+  // the distinction is what keeps that true if it ever does.
+  if (type === 'commercial' && !product.brand) {
+    return { ok: false, reason: 'no-brand' }
+  }
+  if (type === 'commercial' && !product.gtins?.length) {
+    return { ok: false, reason: 'no-barcode' }
   }
 
   return { ok: true, tier: tierOf(product, type) }

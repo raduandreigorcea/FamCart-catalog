@@ -1,6 +1,6 @@
 import { foldName, foldQuery, matchesAllTokens } from './normalize.ts'
 import { gate, tierOf } from './quality.ts'
-import type { SourceProduct } from './sources/types.ts'
+import type { SourceName, SourceProduct } from './sources/types.ts'
 
 // The decisions between "somebody typed something" and "a row exists".
 //
@@ -29,51 +29,232 @@ export interface LocalRow {
 }
 
 /**
+ * How many BUYABLE local answers count as the question being answered.
+ *
+ * Six, which is what the dropdown shows on a phone. The rule it replaces was
+ * "at least one row contains every word typed", and that rule had a failure
+ * nobody predicted until it was watched in production: it is satisfied by the
+ * curated seed's own GENERIC rows.
+ *
+ * Searching "apa" (water) returned a seed row literally named "Apă", which
+ * contains every word typed, so discovery was declared unnecessary and NEVER
+ * RAN — not once, not ever, for one of the most common words in the catalog's
+ * main language. The result was frozen at the six waters the seed shipped with
+ * while AQUA Carpatica, Azuga and Bucovina sat one API call away. The same was
+ * true of lapte, paine, oua and every other everyday word the seed covers:
+ * obscure queries grew the catalog and common ones could not.
+ *
+ * So the question is no longer "did anything match" but "could this person fill
+ * a dropdown with things they can actually buy". A row with no brand is a
+ * concept rather than a product — "Apă" tells somebody holding the list
+ * nothing — so only branded rows count toward the total.
+ *
+ * The cost is one external call for a query whose local answer is thin, and the
+ * per-source cache absorbs the repeat: a hit is remembered for fourteen days
+ * and the products it found are local from then on.
+ */
+export const SUFFICIENT_MATCHES = 6
+
+/**
  * Is the local catalog's answer good enough to skip the external call?
  *
  * THE MOST IMPORTANT FUNCTION HERE, because it is the one that decides how
- * often anything external happens at all. Get it too eager and every keystroke
- * that survives the debounce becomes an outbound request; get it too reluctant
- * and the catalog never grows.
+ * often anything external happens at all, and how fast the catalog can grow.
  *
- * The rule is deliberately about MATCH QUALITY rather than count. Ten rows that
- * all reached the query through a category alias are not an answer to "pepsi
- * zero" — they are the shelf it might be on. One row whose name contains every
- * word typed is a better answer than twenty that do not, so:
- *
- *   sufficient  =  at least one local row contains every token of the query
- *                  OR the query is too short to be worth asking about
+ * Two things have to be true. The words have to match — one row containing
+ * every token, which is the same test the database's own search makes with
+ * `like all (...)`, and which stops ten category matches from passing as an
+ * answer to "pepsi zero". AND there have to be enough of them to choose from,
+ * counted in BRANDED rows only. See SUFFICIENT_MATCHES for why the second half
+ * exists; without it the seed's generic rows answer for their whole category
+ * forever.
  *
  * `minQueryLength` is 3 by §6: below that an external search returns noise
  * proportional to how common the letters are, and the local prefix match is
  * already the better answer.
  */
+export type ConceptIntent = 'generic' | 'branded' | 'mixed'
+
+export interface SufficiencyOptions {
+  minQueryLength?: number
+  sufficientMatches?: number
+  /**
+   * What the word MEANS, from catalog_concept_lookup(), or null when no concept
+   * claims it.
+   *
+   * NULL IS TREATED AS 'branded', and that default is the reason `chorizo`
+   * works. A word no concept knows is a word the catalog has never been asked
+   * about, and the useful assumption about it is that somebody is looking for a
+   * product we do not stock yet. Assuming 'generic' instead would answer every
+   * unknown word with whatever happened to match its letters and never ask
+   * anybody.
+   */
+  intent?: ConceptIntent | null
+}
+
 export function isLocalSufficient(
   rows: LocalRow[],
   query: string,
-  opts: { minQueryLength?: number } = {},
+  opts: SufficiencyOptions = {},
 ): boolean {
   const folded = foldQuery(query)
   if (folded.length < (opts.minQueryLength ?? 3)) return true
   if (!rows.length) return false
 
-  return rows.some((r) => matchesAllTokens(`${r.name} ${r.maker ?? ''}`, query))
+  const answers = rows.filter((r) => matchesAllTokens(`${r.name} ${r.maker ?? ''}`, query))
+  if (!answers.length) return false
+
+  // ─── a generic concept is answered by the bare row ────────────────────────
+  //
+  // THE HALF THAT WAS MISSING, and it was a real regression rather than a
+  // theoretical one. Counting branded rows fixed `apa`, where the seed's own
+  // "Apă" had been suppressing discovery forever — and it broke `cartofi` in
+  // the opposite direction, because potatoes have no brands and never will, so
+  // every produce query started paying for an external call that could not
+  // possibly return anything better than the row already on screen.
+  //
+  // No row count is right for both. The difference between water and potatoes
+  // is not a quantity, it is a fact about the word, and this is the line where
+  // knowing that fact pays for the whole concept layer.
+  if (opts.intent === 'generic') return true
+
+  // Branded and mixed both want real products, and for the same reason: a row
+  // with no maker is a concept, and a list saying "Apă" makes whoever is
+  // holding it guess. Mixed differs in how the results are RANKED, not in
+  // whether it is worth asking — `lapte` should have Zuzu and Napolact in it,
+  // and the one external call that fetches them is cached for a fortnight.
+  const buyable = answers.filter((r) => (r.maker ?? '').trim().length > 0)
+  return buyable.length >= (opts.sufficientMatches ?? SUFFICIENT_MATCHES)
 }
 
 /**
- * Drop results that do not actually answer the question.
+ * How many products one search may add, given what was asked and what was here.
  *
- * An external full-text search ranks by its own relevance and will happily
- * return its best guesses rather than nothing — search-a-licious answers
- * "lapte" with "Chocolat au lait" because the words share a stem in its index.
- * Storing those would fill the catalog with products that are correct data and
- * wrong answers, and they would then be returned locally forever after.
+ * TWO CONDITIONS, and both matter. The local answer has to be thin — there is
+ * no point flooding a category the catalog already covers — AND the query has
+ * to look like BROWSING rather than like a specific product.
  *
- * The test is the same one the database's search makes: does the product's own
- * text contain every word that was typed? Nothing about ranking, nothing about
- * closeness. A result that cannot pass it was never a match for this query,
- * whatever the source thought.
+ * One word is the browse signal. "apa", "lapte", "bere", "chorizo" are asked by
+ * somebody who wants to see what there is, and answering them eight at a time
+ * means the ninth costs the next person another round trip: a live "apa" run
+ * accepted 8 and discarded 15 more that had already passed every filter.
+ *
+ * Two or more words is somebody naming a thing. "milka oreo" returned nineteen
+ * records that were the same biscuit under four brand attributions, which is
+ * exactly what §29.2's cap exists to refuse, and raising it there would undo
+ * that. So a multi-word query keeps the original eight however thin the local
+ * answer was.
  */
+export function capFor(
+  local: LocalRow[],
+  query: string,
+  intent: ConceptIntent | null = null,
+): number {
+  // The same threshold that decided to ask at all, not a weaker one. Asking
+  // "is there at least one branded row" was the first version and it never
+  // fired: a category with two products in it has one, so "faina" kept taking
+  // eight and leaving eleven behind.
+  if (isLocalSufficient(local, query, { intent })) return MAX_ACCEPTED
+  const browsing = foldQuery(query).split(' ').filter(Boolean).length === 1
+  return browsing ? MAX_ACCEPTED_COLD : MAX_ACCEPTED
+}
+
+/**
+ * Take the category back out of the brand, using the words we actually know.
+ *
+ * ─── the problem no string rule can solve ────────────────────────────────────
+ *
+ * Open Food Facts' `brands` field frequently holds category text. A live
+ * chorizo search returned `Chorizo doux` with brand "Chorizo"; a shampoo search
+ * returned `Alpecin HYBRID Caffeine Shampoo` with brand "Shampoo".
+ *
+ * Every attempt to catch that by inspecting the strings alone failed, and failed
+ * in the expensive direction. "The brand is inside the name" flags `Pampers
+ * Nappies` by Pampers and `Hochland Cascaval` by Hochland -- measured against
+ * the live catalog it was wrong about 28 rows out of 36. The difference between
+ * "Chorizo" and "Pampers" is not length, position or shape. It is that one is a
+ * common noun and the other is a proper one, and a string cannot tell you which.
+ *
+ * ─── what makes it solvable now ──────────────────────────────────────────────
+ *
+ * catalog_concept_terms is a list of exactly the common nouns this catalog
+ * knows, in six languages. A brand that IS one of them is the category leaking
+ * out of the source's brand field, and a brand that is not is left completely
+ * alone. Nothing is guessed: the check is equality against a curated word list.
+ *
+ * ─── why it runs before the relevance filter ─────────────────────────────────
+ *
+ * `Ben's Original` is a PAELLA RICE that reached the chorizo results, because
+ * relevantTo() matches on `name + brand` and its brand was "Favourites Chorizo
+ * And Vegetable Paella". A junk brand does not merely look wrong under a
+ * product -- it walks products that are not the thing you searched for straight
+ * through the gate. Cleaning first is what makes the gate honest.
+ *
+ * The brand is CLEARED, never rewritten. A product with no brand is findable
+ * and correct; a product with an invented one is a commercial fact nobody
+ * checked (S4).
+ */
+/**
+ * Drop results that are only the concept's own word with nothing attached.
+ *
+ * ─── what these look like ────────────────────────────────────────────────────
+ *
+ * Open Food Facts holds a great many records that are a barcode, the bare word
+ * ("Pâine", "Batterien", "Pilas", "Air freshener"), and nothing else. They pass
+ * the quality gate honestly -- a barcode identifies them -- and they are still
+ * useless on a shopping list, because they are indistinguishable from the
+ * generic concept while claiming to be a product. A dropdown that answers
+ * "paine" with the word "Pâine" four times has told the reader nothing.
+ *
+ * They are also the worst possible rows in the best possible position:
+ * `name_exact` scores 100, so they outrank every real product. Searching
+ * "paine" put five of them above Dobrogea's sliced loaf.
+ *
+ * ─── the same judgement the seed already made ────────────────────────────────
+ *
+ * Fifty concepts were cut from the curated seed for exactly this, under the
+ * test "is the bare word enough to shop from". This applies that test to what
+ * discovery brings back, rather than only to what a person authored.
+ *
+ * ─── why a brand rescues it ──────────────────────────────────────────────────
+ *
+ * "Pâine" by Bacus IS shoppable: it names a bakery, so whoever is holding the
+ * list can buy the right thing. Only the rows with no maker at all are refused,
+ * which measured against the live catalog is 170 rows out of 8,407 -- the ones
+ * that carry no information whatsoever beyond a word the catalog already knows.
+ *
+ * A quantity is not enough on its own to keep the name, but it changes the
+ * name: `Lapte 3.5% 1L` is not the bare word and never reaches this filter.
+ */
+export function withoutBareConcepts(
+  products: SourceProduct[],
+  categoryTerms: string[],
+): SourceProduct[] {
+  if (!categoryTerms.length) return products
+  const words = new Set(categoryTerms.map((t) => foldQuery(t)).filter(Boolean))
+  if (!words.size) return products
+
+  return products.filter((p) => {
+    if (p.brand && p.brand.trim()) return true
+    return !words.has(foldQuery(p.name))
+  })
+}
+
+export function stripCategoryBrands(
+  products: SourceProduct[],
+  categoryTerms: string[],
+): SourceProduct[] {
+  if (!categoryTerms.length) return products
+  const words = new Set(categoryTerms.map((t) => foldQuery(t)).filter(Boolean))
+  if (!words.size) return products
+
+  return products.map((p) => {
+    if (!p.brand || !words.has(foldQuery(p.brand))) return p
+    const { brand: _dropped, ...rest } = p
+    return rest
+  })
+}
+
 export function relevantTo(products: SourceProduct[], query: string): SourceProduct[] {
   return products.filter((p) => matchesAllTokens(`${p.name} ${p.brand ?? ''}`, query))
 }
@@ -201,6 +382,34 @@ export interface ImportRow {
   source_id: string
   source_url?: string
   source_updated_at?: string
+  /**
+   * Which database this row came from.
+   *
+   * NOT read by `catalog_import_products` — that RPC takes one `p_source` for
+   * the whole batch and writes it into `catalog_sources` itself. It is carried
+   * here so the caller can GROUP by it before calling, because provenance is a
+   * per-row fact once more than one source is being asked and an ODbL
+   * attribution recorded against the wrong database is simply wrong.
+   */
+  source: SourceName
+}
+
+/**
+ * Split accepted rows by which source they came from.
+ *
+ * The shape `catalog_import_products(p_rows, p_source)` needs: one call per
+ * source, each batch honestly attributed. Insertion order is preserved so a
+ * single-source result still produces a single call with the rows in the order
+ * the pipeline ranked them.
+ */
+export function groupBySource(rows: ImportRow[]): Map<SourceName, ImportRow[]> {
+  const groups = new Map<SourceName, ImportRow[]>()
+  for (const row of rows) {
+    const existing = groups.get(row.source)
+    if (existing) existing.push(row)
+    else groups.set(row.source, [row])
+  }
+  return groups
 }
 
 /**
@@ -227,6 +436,7 @@ export function toImportRows(products: SourceProduct[]): ImportRow[] {
     ...(p.imageUrl ? { image_url: p.imageUrl } : {}),
     tier: tierOf(p, 'commercial'),
     ...(p.gtins?.length ? { gtins: p.gtins } : {}),
+    source: p.source,
     source_id: p.sourceId,
     ...(p.sourceUrl ? { source_url: p.sourceUrl } : {}),
     ...(p.sourceUpdatedAt ? { source_updated_at: p.sourceUpdatedAt } : {}),
@@ -238,6 +448,7 @@ export interface PipelineResult {
   stats: {
     returned: number
     irrelevant: number
+    bare: number
     rejected: number
     alreadyKnown: number
     collapsed: number
@@ -283,16 +494,42 @@ export interface PipelineResult {
  */
 const MAX_ACCEPTED = 8
 
+/**
+ * The cap when the local catalog had nothing useful to say.
+ *
+ * Bigger, because this is the case where the catalog is being FILLED rather
+ * than topped up, and the products beyond the eighth are not noise — they are
+ * the AQUA Carpaticas and Azugas of the next query, already ranked by
+ * completeness and about to be thrown away. See capFor().
+ */
+const MAX_ACCEPTED_COLD = 20
+
 export function pipeline(
   products: SourceProduct[],
   query: string,
   local: LocalRow[],
-  opts: { maxAccepted?: number } = {},
+  opts: {
+    maxAccepted?: number
+    intent?: ConceptIntent | null
+    /** The resolved concept's own words, in six languages. See stripCategoryBrands. */
+    categoryTerms?: string[]
+  } = {},
 ): PipelineResult {
   const returned = products.length
-  const cap = opts.maxAccepted ?? MAX_ACCEPTED
+  const cap = opts.maxAccepted ?? capFor(local, query, opts.intent ?? null)
 
-  const relevant = relevantTo(products, query)
+  // FIRST, because a junk brand walks irrelevant products through the gate
+  // below rather than merely looking wrong underneath a relevant one.
+  const cleaned = stripCategoryBrands(products, opts.categoryTerms ?? [])
+
+  // Then the rows that are only the concept's word. AFTER the brand clean, on
+  // purpose: a product whose brand was the category ("Chorizo doux" by
+  // "Chorizo") loses that brand above and becomes eligible here, which is
+  // correct -- with the junk removed it really does carry nothing.
+  const substantive = withoutBareConcepts(cleaned, opts.categoryTerms ?? [])
+  const bare = cleaned.length - substantive.length
+
+  const relevant = relevantTo(substantive, query)
   const irrelevant = returned - relevant.length
 
   const { accepted: passed, rejected, reasons } = gate(relevant, 'commercial')
@@ -315,6 +552,9 @@ export function pipeline(
     stats: {
       returned,
       irrelevant,
+      // Counted rather than folded into `irrelevant`: these DID match the
+      // query, which is precisely the problem with them.
+      bare,
       rejected,
       alreadyKnown,
       collapsed: merged,

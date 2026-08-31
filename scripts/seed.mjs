@@ -34,7 +34,12 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { createClient } from '@supabase/supabase-js'
-import { buildSeedRows, validateSeedRows } from '../supabase/functions/_shared/seedRows.ts'
+import {
+  buildSeedRows,
+  validateSeedRows,
+  conceptRows,
+  validateConceptRows,
+} from '../supabase/functions/_shared/seedRows.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 // .env.scripts lives in the SUPERPROJECT when this repo is checked out as a
@@ -71,7 +76,12 @@ const SMOKE = [
   { q: 'latte', lang: 'it', expect: 'Latte' },
   { q: 'milk', lang: 'en', expect: 'Milk' },
   { q: 'toilet paper', lang: 'en', expect: 'Toilet paper' },
-  { q: 'baterii', lang: 'ro', expect: 'Baterii' },
+  // BRANDED, so the real product leads and the generic "Baterii" sits under it.
+  // This expectation used to be the generic row and was changed deliberately
+  // when concepts landed: nobody typing "baterii" wants to be told "batteries",
+  // they want to know which ones this shop has. If this ever flips back, the
+  // intent for `batteries` has been lost rather than the ranking broken.
+  { q: 'baterii', lang: 'ro', expect: 'Baterii AA 4 buc' },
   { q: 'usb c', lang: 'en', expect: 'USB cable' },
   // A real Romanian shop line, reached by its own name rather than by a concept.
   { q: 'sampon', lang: 'ro', expect: 'Sampon 400ml' },
@@ -150,35 +160,46 @@ function loadSeed() {
   const generics = read('generics.json')
   const categories = read('categories.json')
   const commercial = read('commercial-ro.json')
+  const concepts = read('concepts.json')
 
   const rows = buildSeedRows(generics.generics, categories.categories, commercial.products)
+  const conceptList = conceptRows(generics.generics, concepts.intents, concepts.concepts)
 
-  const problems = validateSeedRows(rows)
+  const problems = [...validateSeedRows(rows), ...validateConceptRows(conceptList)]
   if (problems.length) {
     console.error(`${problems.length} problem(s) in the seed files:`)
     for (const p of problems.slice(0, 40)) console.error('  ' + p)
     if (problems.length > 40) console.error(`  ...and ${problems.length - 40} more`)
     process.exit(1)
   }
-  return rows
+  return { rows, concepts: conceptList }
 }
 
 // ─── run ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const rows = loadSeed()
+  const { rows, concepts } = loadSeed()
   const aliases = rows.reduce((n, r) => n + r.aliases.length, 0)
   const gtins = rows.reduce((n, r) => n + (r.gtins?.length ?? 0), 0)
+  const terms = concepts.reduce((n, c) => n + c.terms.length, 0)
+  const byIntent = (i) => concepts.filter((c) => c.intent === i).length
 
   console.log(
     `seed: ${rows.length} products, ${aliases} aliases, ${gtins} barcodes ` +
     `(${rows.filter((r) => r.type === 'generic').length} generic, ` +
     `${rows.filter((r) => r.type === 'commercial').length} commercial)`,
   )
+  console.log(
+    `      ${concepts.length} concepts, ${terms} terms ` +
+    `(${byIntent('generic')} generic, ${byIntent('branded')} branded, ${byIntent('mixed')} mixed; ` +
+    `${concepts.filter((c) => !c.productSourceId).length} with no product)`,
+  )
 
   if (dryRun) {
     console.log('--dry-run: nothing written. First row:')
     console.log(JSON.stringify(rows[0], null, 2))
+    console.log('First concept:')
+    console.log(JSON.stringify(concepts[0], null, 2))
     return
   }
 
@@ -227,8 +248,135 @@ async function main() {
     process.exitCode = 1
   }
 
+  await loadConcepts(db, concepts)
+
   if (prune) await pruneRemoved(db, rows)
   if (verify) await smokeTest(db)
+}
+
+// ─── concepts ────────────────────────────────────────────────────────────────
+// AFTER the products, and the order is load-bearing in one direction only: the
+// backfill below attaches products to concepts, so the products have to exist.
+// Nothing about the concepts themselves depends on a product, which is the
+// whole point of the layer — 52 of them describe words this catalog stocks
+// nothing for.
+async function loadConcepts(db, concepts) {
+  const totals = { inserted: 0, updated: 0, skipped: 0, terms_added: 0, terms_removed: 0 }
+  const errors = []
+
+  for (let i = 0; i < concepts.length; i += BATCH_SIZE) {
+    const batch = concepts.slice(i, i + BATCH_SIZE).map((c) => ({
+      slug: c.slug,
+      intent: c.intent,
+      category: c.category ?? null,
+      weight: c.weight,
+      terms: c.terms,
+    }))
+
+    const { data, error } = await db.rpc('catalog_import_concepts', { p_rows: batch })
+
+    if (error) {
+      console.error(`concept batch ${i / BATCH_SIZE + 1} failed: ${error.message}`)
+      process.exit(1)
+    }
+
+    for (const k of Object.keys(totals)) totals[k] += data[k] ?? 0
+    if (data.errors?.length) errors.push(...data.errors)
+  }
+
+  console.log(
+    `concepts: inserted ${totals.inserted}, updated ${totals.updated}, ` +
+    `skipped ${totals.skipped}, +${totals.terms_added} terms, -${totals.terms_removed} stale terms`,
+  )
+
+  if (errors.length) {
+    console.error(`\n${errors.length} concept(s) were rejected:`)
+    for (const e of errors) console.error(`  ${e.concept}: ${e.error}`)
+    process.exitCode = 1
+  }
+
+  await attachConcepts(db, concepts)
+}
+
+// ─── attribution ─────────────────────────────────────────────────────────────
+// Point each seeded generic product at the concept it IS.
+//
+// MATCHED THROUGH catalog_sources, NOT THROUGH NAMES. The seed's own id for a
+// generic ("water", "potato") is what the importer recorded as
+// source_product_id, so this is a join on a key both sides already agreed on.
+// Matching on the canonical name instead would be a fold comparison across two
+// databases' worth of assumptions, and it would silently attach the wrong
+// product the first time two concepts shared an English name.
+//
+// The commercial rows are deliberately left unattributed. Nothing in
+// commercial-ro.json says which concept "Apa Plata 2L Dorna" belongs to, and
+// inferring it from the string "Apa" is exactly the confident wrong merge §15
+// forbids. They earn a concept the same way a discovered row does: by being
+// returned for a search that resolved to one.
+async function attachConcepts(db, concepts) {
+  const derived = concepts.filter((c) => c.productSourceId)
+  if (!derived.length) return
+
+  const { data: links, error: linkError } = await db
+    .from('catalog_sources')
+    .select('product_id, source_product_id')
+    .eq('source_name', 'curated')
+    .in('source_product_id', derived.map((c) => c.productSourceId))
+
+  if (linkError) {
+    console.error(`attribution lookup failed: ${linkError.message}`)
+    process.exitCode = 1
+    return
+  }
+
+  const productBySourceId = new Map((links ?? []).map((l) => [l.source_product_id, l.product_id]))
+
+  const { data: rows, error: conceptError } = await db
+    .from('catalog_concepts')
+    .select('id, slug')
+    .in('slug', derived.map((c) => c.slug))
+
+  if (conceptError) {
+    console.error(`attribution lookup failed: ${conceptError.message}`)
+    process.exitCode = 1
+    return
+  }
+
+  const conceptBySlug = new Map((rows ?? []).map((r) => [r.slug, r.id]))
+
+  let attached = 0
+  let missing = 0
+
+  for (const c of derived) {
+    const productId = productBySourceId.get(c.productSourceId)
+    const conceptId = conceptBySlug.get(c.slug)
+    if (!productId || !conceptId) {
+      missing++
+      continue
+    }
+
+    // p_overwrite, because here the seed IS the authority: a generic product
+    // and its concept are the same idea and there is no earlier decision worth
+    // preserving. Discovery calls the same function with the default, so it can
+    // attribute an unattached row and never override this one.
+    const { error } = await db.rpc('catalog_attach_concept', {
+      p_product_ids: [productId],
+      p_concept_id: conceptId,
+      p_overwrite: true,
+    })
+
+    if (error) {
+      console.error(`attaching ${c.slug} failed: ${error.message}`)
+      process.exitCode = 1
+      return
+    }
+    attached++
+  }
+
+  console.log(
+    `attribution: ${attached} generic product(s) attached to their concept` +
+    (missing ? `, ${missing} could not be matched` : ''),
+  )
 }
 
 // ─── pruning ─────────────────────────────────────────────────────────────────

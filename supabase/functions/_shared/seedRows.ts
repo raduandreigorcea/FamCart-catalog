@@ -223,3 +223,163 @@ export function validateSeedRows(rows: ImportRow[]): string[] {
 }
 
 export type { Language }
+
+// ─── concepts ────────────────────────────────────────────────────────────────
+// The second half of the seed, and it does NOT produce products.
+//
+// See catalog/seed/concepts.json for what a concept is and why the file has two
+// halves. The shape here mirrors that split exactly:
+//
+//   * A concept derived from generics.json takes its NAMES from there. Restating
+//     six translations in a second file would be two copies of one fact and the
+//     copies would drift; only the intent is authored in concepts.json, and only
+//     where it differs from the default.
+//   * A concept in the `concepts` array has no product and is not meant to. It
+//     carries its own six names because there is nowhere else for them to live.
+//
+// `productSourceId` is the thread back to a product. It is the generic's seed id,
+// which is what catalog_sources records as source_product_id, and it is how the
+// backfill attaches 188 rows to their concepts without matching on names.
+
+export interface ConceptTerm {
+  term: string
+  lang?: string
+  type: 'label' | 'synonym'
+}
+
+export interface ConceptRow {
+  slug: string
+  intent: 'generic' | 'branded' | 'mixed'
+  category?: string
+  weight: number
+  terms: ConceptTerm[]
+  /** The seed id of the generic product this concept came from, where there is one. */
+  productSourceId?: string
+}
+
+export type ConceptIntent = ConceptRow['intent']
+
+interface ConceptEntry {
+  id: string
+  cat?: string
+  intent: ConceptIntent
+  w: number
+  n: Record<string, string>
+  syn?: Record<string, string[]>
+}
+
+const INTENTS: readonly ConceptIntent[] = ['generic', 'branded', 'mixed']
+
+/** Six labels plus any synonyms, skipping languages the entry does not have. */
+function termsOf(names: Record<string, string>, syn?: Record<string, string[]>): ConceptTerm[] {
+  const terms: ConceptTerm[] = []
+
+  for (const lang of LANGUAGES) {
+    const name = names[lang]?.trim()
+    if (name) terms.push({ term: name, lang, type: 'label' })
+  }
+
+  for (const [lang, list] of Object.entries(syn ?? {})) {
+    if (!isLanguage(lang)) continue
+    for (const term of list) {
+      const trimmed = term.trim()
+      if (trimmed) terms.push({ term: trimmed, lang, type: 'synonym' })
+    }
+  }
+
+  return terms
+}
+
+/**
+ * Every concept the seed has to say, from both halves of the file.
+ *
+ * THE DEFAULT IS 'generic', and that is a claim about this seed rather than
+ * about shopping. generics.json was deliberately built out of things you can
+ * buy without choosing a brand — fifty concepts that needed one were removed
+ * from it — so a row in there with no override is one nobody has to make a
+ * commercial decision about. The overrides are the exceptions, which is why
+ * they are the half that is written down.
+ */
+export function conceptRows(
+  generics: GenericEntry[],
+  intents: Record<string, string>,
+  concepts: ConceptEntry[],
+): ConceptRow[] {
+  const fromGenerics: ConceptRow[] = generics.map((g) => ({
+    slug: g.id,
+    intent: (INTENTS as readonly string[]).includes(intents[g.id])
+      ? (intents[g.id] as ConceptIntent)
+      : 'generic',
+    ...(g.cat ? { category: g.cat } : {}),
+    weight: g.w,
+    terms: termsOf(g.n, g.syn),
+    productSourceId: g.id,
+  }))
+
+  const standalone: ConceptRow[] = concepts.map((c) => ({
+    slug: c.id,
+    intent: c.intent,
+    ...(c.cat ? { category: c.cat } : {}),
+    weight: c.w,
+    terms: termsOf(c.n, c.syn),
+  }))
+
+  return [...fromGenerics, ...standalone]
+}
+
+/**
+ * Every problem the database would reject a concept for, found before the call.
+ *
+ * The two that are worth catching here rather than in a batch summary:
+ *
+ *   * A DUPLICATE SLUG silently becomes an update in catalog_import_concepts,
+ *     so the second entry quietly overwrites the first's intent and the summary
+ *     reports a healthy run.
+ *   * A TERM COLLIDING ACROSS CONCEPTS is legal in the database on purpose
+ *     (`prune` is fresh plums in Romanian and dried plums in English), so
+ *     nothing downstream will complain. It is reported here as a WARNING rather
+ *     than a problem, because it is usually deliberate and occasionally a typo,
+ *     and only a person can tell which.
+ */
+export function validateConceptRows(rows: ConceptRow[]): string[] {
+  const problems: string[] = []
+  const seenSlug = new Map<string, number>()
+
+  rows.forEach((row, i) => {
+    const where = row.slug || `#${i}`
+
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(row.slug)) problems.push(`${where}: slug is not kebab-case`)
+    if (!(INTENTS as readonly string[]).includes(row.intent)) {
+      problems.push(`${where}: intent '${row.intent}' is not generic, branded or mixed`)
+    }
+    if (!row.terms.length) problems.push(`${where}: no terms, so nothing can ever resolve to it`)
+
+    const seenTerm = new Map<string, string>()
+    for (const t of row.terms) {
+      if (!t.term.trim()) problems.push(`${where}: empty term`)
+      if (t.lang && !isLanguage(t.lang)) problems.push(`${where}: term in unknown language '${t.lang}'`)
+
+      // WITHIN ONE LANGUAGE ONLY, and the distinction is the whole reason this
+      // check is narrow. The same string being the label in several languages
+      // is ordinary and correct -- "Mozzarella" is the name in all six, and so
+      // are Broccoli, Dill and Vodka. The database holds one term row per
+      // concept per folded string, so five of those six are dropped by
+      // `on conflict do nothing` and resolution still works: the surviving row
+      // carries whichever language won, and the string is identical anyway.
+      //
+      // A repeat inside ONE language is different. That is a label and a
+      // synonym that say the same thing, or the same word typed twice, and
+      // there is no reading of it that was intended.
+      const key = `${t.lang ?? '-'}:${t.term.trim().toLowerCase()}`
+      const prev = seenTerm.get(key)
+      if (prev) problems.push(`${where}: '${t.term}' repeats '${prev}' in the same language`)
+      seenTerm.set(key, t.term)
+    }
+
+    const prev = seenSlug.get(row.slug)
+    if (prev !== undefined) problems.push(`${where}: duplicate slug, also at #${prev}`)
+    seenSlug.set(row.slug, i)
+  })
+
+  return problems
+}

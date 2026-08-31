@@ -39,7 +39,30 @@
 --     A single malformed record out of Open Food Facts must not lose the other
 --     forty-nine.
 
-create or replace function public.catalog_import_products(p_rows jsonb, p_source text)
+-- Dropped first because the argument list gains p_concept_id and `create or
+-- replace` cannot add a parameter. PostgREST resolves an RPC by the argument
+-- NAMES in the body, so an existing two-argument call still binds to this and
+-- the seed importer needs no change.
+drop function if exists public.catalog_import_products(jsonb, text);
+
+create or replace function public.catalog_import_products(
+  p_rows       jsonb,
+  p_source     text,
+  -- Which concept these rows answer to, when the caller knows.
+  --
+  -- The discovery function does know: the query that found them resolved to a
+  -- concept before the external call was made, so attributing the results is
+  -- evidence rather than a guess -- somebody typed `apa`, this came back, and it
+  -- passed the relevance filter. The seed importer passes nothing, because
+  -- commercial-ro.json says nothing about concepts and inferring one from the
+  -- string "Apa Plata 2L" is the confident wrong merge S15 forbids.
+  --
+  -- NEVER OVERWRITES an attribution that already exists. A row can be returned
+  -- by searches for two different concepts, and the first one to claim it is no
+  -- worse a guess than the second; churning the column would make a product's
+  -- concept depend on who searched last.
+  p_concept_id uuid default null
+)
 returns jsonb
 language plpgsql
 security definer
@@ -114,7 +137,8 @@ begin
       if v_id is null then
         insert into public.catalog_products (
           product_type, canonical_name, name_lang, brand, category,
-          markets, quantity, quantity_unit, image_url, quality_tier, base_weight
+          markets, quantity, quantity_unit, image_url, quality_tier, base_weight,
+          concept_id
         ) values (
           coalesce(r->>'type', 'commercial'),
           btrim(r->>'name'),
@@ -128,7 +152,8 @@ begin
           coalesce(r->>'tier', 'C'),
           -- Editorial weight is the seed's alone. An external source that could
           -- set it could outrank every curated staple on day one.
-          case when p_source = 'curated' then coalesce((r->>'weight')::integer, 0) else 0 end
+          case when p_source = 'curated' then coalesce((r->>'weight')::integer, 0) else 0 end,
+          p_concept_id
         )
         returning id into v_id;
         n_ins := n_ins + 1;
@@ -185,7 +210,10 @@ begin
           base_weight = case
             when p_source = 'curated' then coalesce((r->>'weight')::integer, p.base_weight)
             else p.base_weight
-          end
+          end,
+          -- A blank may be filled, a claim is never restated. Same rule as
+          -- category and image_url above.
+          concept_id = coalesce(p.concept_id, p_concept_id)
           -- add_count is absent from this SET list on purpose. It is the one
           -- column an import may never touch: it is what real people earned.
         where p.id = v_id;
@@ -297,5 +325,5 @@ $$;
 -- No client role may call this, ever. It is SECURITY DEFINER and it writes the
 -- global catalog; the seed importer and the discovery function both hold the
 -- service-role key and that is the whole intended audience.
-revoke all on function public.catalog_import_products(jsonb, text) from public, anon, authenticated;
-grant execute on function public.catalog_import_products(jsonb, text) to service_role;
+revoke all on function public.catalog_import_products(jsonb, text, uuid) from public, anon, authenticated;
+grant execute on function public.catalog_import_products(jsonb, text, uuid) to service_role;
