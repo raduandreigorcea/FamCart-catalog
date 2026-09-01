@@ -24,7 +24,7 @@
 --      leading nowhere.
 
 begin;
-select plan(28);
+select plan(60);
 
 delete from public.catalog_products;
 delete from public.catalog_admins;
@@ -258,6 +258,315 @@ set local request.jwt.claims = '{"sub":"admin_user"}';
 select lives_ok(
   $t$ select public.catalog_admin_delete_product('00000000-0000-0000-0000-00000000dead'::uuid) $t$,
   'deleting a product that is already gone is a no-op, not an error'
+);
+
+-- ── 7. Editing everything (010_admin_edit_everything.sql) ────────────────────
+-- The columns 009 left unreachable, and the one convention that governs all of
+-- them: null leaves a column alone, an empty string clears it, anything else
+-- sets it. The convention is the thing worth pinning -- an update that omits a
+-- field and erases it is silent, and the field it erases is usually the barcode.
+
+reset role;
+insert into public.catalog_products
+  (id, product_type, canonical_name, name_lang, brand, category, markets,
+   base_weight, quality_tier, quantity, quantity_unit, image_url)
+values
+  ('00000000-0000-0000-0000-0000000000e1', 'commercial', 'Editable Thing', 'en',
+   'Acme', 'pantry', array['RO'], 4, 'C', 500, 'g', 'https://example.com/a.jpg');
+
+insert into public.catalog_identifiers (product_id, identifier_type, identifier_value, source)
+values ('00000000-0000-0000-0000-0000000000e1', 'gtin', '4000000000021', 'admin');
+
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"admin_user"}';
+
+-- Everything sent at once, which is what the dashboard form does.
+select lives_ok(
+  $t$ select public.catalog_admin_update_product(
+        '00000000-0000-0000-0000-0000000000e1'::uuid,
+        'Editable Thing', 'commercial', 'de', 'Acme Gmbh', 'drinks',
+        array['DE','AT'], 9, '4000000000038', 750, 'ml',
+        'https://example.com/b.jpg', 'A') $t$,
+  'an admin edits every column at once'
+);
+
+reset role;
+
+select is(
+  (select name_lang from public.catalog_products where id = '00000000-0000-0000-0000-0000000000e1'),
+  'de',
+  'the name language changes'
+);
+
+select is(
+  (select brand from public.catalog_products where id = '00000000-0000-0000-0000-0000000000e1'),
+  'Acme Gmbh',
+  'the brand changes'
+);
+
+select is(
+  (select category from public.catalog_products where id = '00000000-0000-0000-0000-0000000000e1'),
+  'drinks',
+  'the category changes'
+);
+
+select is(
+  (select markets from public.catalog_products where id = '00000000-0000-0000-0000-0000000000e1'),
+  array['DE','AT'],
+  'the markets change'
+);
+
+select is(
+  (select quality_tier from public.catalog_products where id = '00000000-0000-0000-0000-0000000000e1'),
+  'A',
+  'the record tier changes'
+);
+
+select is(
+  (select quantity_unit from public.catalog_products where id = '00000000-0000-0000-0000-0000000000e1'),
+  'ml',
+  'the quantity unit changes'
+);
+
+select is(
+  (select image_url from public.catalog_products where id = '00000000-0000-0000-0000-0000000000e1'),
+  'https://example.com/b.jpg',
+  'the image changes'
+);
+
+-- The one 009 refused. It moves, and the old code goes with it rather than
+-- lingering as a second row that would still resolve a scan.
+select is(
+  (select identifier_value from public.catalog_identifiers
+   where product_id = '00000000-0000-0000-0000-0000000000e1'),
+  '4000000000038',
+  'the barcode moves'
+);
+
+select is(
+  (select count(*)::int from public.catalog_identifiers
+   where product_id = '00000000-0000-0000-0000-0000000000e1'),
+  1,
+  'and the code it replaced does not linger beside it'
+);
+
+-- The derived key follows the new name and brand, computed by the trigger's own
+-- rule rather than a second copy of it.
+select is(
+  (select normalized_name from public.catalog_products where id = '00000000-0000-0000-0000-0000000000e1'),
+  public.catalog_normalize('Editable Thing', 'Acme Gmbh'),
+  'and the merge key follows the name and brand together'
+);
+
+-- ── 8. null leaves alone, empty clears ───────────────────────────────────────
+
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"admin_user"}';
+
+select lives_ok(
+  $t$ select public.catalog_admin_update_product(
+        '00000000-0000-0000-0000-0000000000e1'::uuid,
+        'Editable Thing', 'commercial', 'de', 'Acme Gmbh') $t$,
+  'an update that mentions only the required fields is accepted'
+);
+
+reset role;
+
+-- The failure this convention exists to prevent: an update that did not mention
+-- the barcode must not remove it.
+select is(
+  (select count(*)::int from public.catalog_identifiers
+   where product_id = '00000000-0000-0000-0000-0000000000e1'),
+  1,
+  'a barcode nobody mentioned survives the update'
+);
+
+select is(
+  (select markets from public.catalog_products where id = '00000000-0000-0000-0000-0000000000e1'),
+  array['DE','AT'],
+  'and so do the markets'
+);
+
+select is(
+  (select base_weight from public.catalog_products where id = '00000000-0000-0000-0000-0000000000e1'),
+  9,
+  'and the base weight'
+);
+
+select is(
+  (select quality_tier from public.catalog_products where id = '00000000-0000-0000-0000-0000000000e1'),
+  'A',
+  'and the record tier'
+);
+
+select is(
+  (select quantity_unit from public.catalog_products where id = '00000000-0000-0000-0000-0000000000e1'),
+  'ml',
+  'and the quantity'
+);
+
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"admin_user"}';
+
+-- Emptied on purpose, which is a real thing to want when a code turns out to
+-- belong to something else.
+select lives_ok(
+  $t$ select public.catalog_admin_update_product(
+        '00000000-0000-0000-0000-0000000000e1'::uuid,
+        'Editable Thing', 'commercial', 'de', 'Acme Gmbh', '', null, null,
+        '', null, '', '') $t$,
+  'an empty string clears a field rather than being refused'
+);
+
+reset role;
+
+select is(
+  (select count(*)::int from public.catalog_identifiers
+   where product_id = '00000000-0000-0000-0000-0000000000e1'),
+  0,
+  'an explicitly emptied barcode is removed'
+);
+
+select is(
+  (select category from public.catalog_products where id = '00000000-0000-0000-0000-0000000000e1'),
+  null,
+  'an explicitly emptied category is cleared'
+);
+
+-- The pair moves together, because the check constraint refuses one without the
+-- other.
+select is(
+  (select quantity from public.catalog_products where id = '00000000-0000-0000-0000-0000000000e1'),
+  null,
+  'clearing the unit clears the number with it'
+);
+
+select is(
+  (select image_url from public.catalog_products where id = '00000000-0000-0000-0000-0000000000e1'),
+  null,
+  'and an emptied image is cleared'
+);
+
+-- ── 9. What editing refuses ──────────────────────────────────────────────────
+
+reset role;
+insert into public.catalog_products (id, product_type, canonical_name, name_lang)
+values ('00000000-0000-0000-0000-0000000000e2', 'commercial', 'Rival Thing', 'en');
+
+insert into public.catalog_identifiers (product_id, identifier_type, identifier_value, source)
+values ('00000000-0000-0000-0000-0000000000e2', 'gtin', '4000000000045', 'admin');
+
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"admin_user"}';
+
+-- The reason the barcode was withheld in the first place, now refused outright
+-- rather than avoided by hiding the field.
+select throws_ok(
+  $t$ select public.catalog_admin_update_product(
+        '00000000-0000-0000-0000-0000000000e1'::uuid,
+        'Editable Thing', 'commercial', 'de', 'Acme Gmbh', null, null, null,
+        '4000000000045') $t$,
+  'P0001',
+  'Another product already claims that barcode.',
+  'a barcode belonging to another product cannot be taken'
+);
+
+select throws_ok(
+  $t$ select public.catalog_admin_update_product(
+        '00000000-0000-0000-0000-0000000000e1'::uuid,
+        'Editable Thing', 'commercial', 'de', 'Acme Gmbh', null, null, null,
+        'nonsense') $t$,
+  'P0001',
+  'A barcode must be 8 to 14 digits.',
+  'and a malformed one is refused before the constraint can fire'
+);
+
+select throws_ok(
+  $t$ select public.catalog_admin_update_product(
+        '00000000-0000-0000-0000-0000000000e1'::uuid,
+        'Editable Thing', 'commercial', 'de', 'Acme Gmbh', 'condiments') $t$,
+  'P0001',
+  'That is not a category this catalog uses.',
+  'a category outside the seventeen is refused'
+);
+
+select throws_ok(
+  $t$ select public.catalog_admin_update_product(
+        '00000000-0000-0000-0000-0000000000e1'::uuid,
+        'Editable Thing', 'commercial', 'de', 'Acme Gmbh', null, null, null,
+        null, null, 'furlong') $t$,
+  'P0001',
+  'A quantity unit is one of g, kg, ml, l, cl or piece.',
+  'as is a unit the constraint does not know'
+);
+
+select throws_ok(
+  $t$ select public.catalog_admin_update_product(
+        '00000000-0000-0000-0000-0000000000e1'::uuid,
+        'Editable Thing', 'commercial', 'de', 'Acme Gmbh', null, null, null,
+        null, null, 'g') $t$,
+  'P0001',
+  'A quantity needs a number greater than zero to go with its unit.',
+  'and a unit with no number, which the constraint would reject anyway'
+);
+
+select throws_ok(
+  $t$ select public.catalog_admin_update_product(
+        '00000000-0000-0000-0000-0000000000e1'::uuid,
+        'Editable Thing', 'commercial', 'de', 'Acme Gmbh', null, null, null,
+        null, null, null, 'http://example.com/a.jpg') $t$,
+  'P0001',
+  'An image address must start with https:// and be under 500 characters.',
+  'an image address that is not https is refused'
+);
+
+select throws_ok(
+  $t$ select public.catalog_admin_update_product(
+        '00000000-0000-0000-0000-0000000000e1'::uuid,
+        'Editable Thing', 'commercial', 'de', 'Acme Gmbh', null, null, null,
+        null, null, null, null, 'D') $t$,
+  'P0001',
+  'A record tier is A, B or C.',
+  'and a tier outside A, B and C'
+);
+
+-- The merge key is name AND brand, which is what the derive trigger computes.
+-- Two products may share a name while their brands differ, and renaming one so
+-- that the PAIR collides has to be refused by name -- if the pre-check used the
+-- name alone it would pass here and the unique index would fire instead, which
+-- is the raw 23505 these messages exist to replace.
+reset role;
+insert into public.catalog_products (id, product_type, canonical_name, name_lang, brand)
+values
+  ('00000000-0000-0000-0000-0000000000e3', 'commercial', 'Cola', 'en', 'Acme'),
+  ('00000000-0000-0000-0000-0000000000e4', 'commercial', 'Cola', 'en', 'Beta');
+
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"admin_user"}';
+
+select throws_ok(
+  $t$ select public.catalog_admin_update_product(
+        '00000000-0000-0000-0000-0000000000e4'::uuid,
+        'Cola', 'commercial', 'en', 'Acme') $t$,
+  'P0001',
+  'Another product already normalises to that name.',
+  'a collision that exists only because of the brand is refused by name'
+);
+
+select lives_ok(
+  $t$ select public.catalog_admin_update_product(
+        '00000000-0000-0000-0000-0000000000e4'::uuid,
+        'Cola', 'commercial', 'en', 'Gamma') $t$,
+  'while the same name under a different brand is left alone'
+);
+
+-- Keeping its own barcode is not taking somebody else's.
+select lives_ok(
+  $t$ select public.catalog_admin_update_product(
+        '00000000-0000-0000-0000-0000000000e2'::uuid,
+        'Rival Thing', 'commercial', 'en', null, null, null, null,
+        '4000000000045') $t$,
+  'a product may be saved with the barcode it already has'
 );
 
 select * from finish();
