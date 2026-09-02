@@ -37,7 +37,10 @@ set local role authenticated;
 set local request.jwt.claims = '{"sub":"ordinary_user"}';
 
 select throws_ok(
-  $t$ select * from public.catalog_admin_products(null, null, 25, 0) $t$,
+  -- No arguments rather than a positional list. 011 put five text filters
+  -- between p_type and p_limit, so `(null, null, 25, 0)` now offers 25 as a
+  -- market code and fails on the wrong thing.
+  $t$ select * from public.catalog_admin_products() $t$,
   42501,
   null,
   'an ordinary signed-in user cannot browse the catalog through the admin RPC'
