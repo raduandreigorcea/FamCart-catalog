@@ -17,12 +17,14 @@
 --      added rather than replaced.
 --   5. IDENTITY IS RESOLVED IN §12's ORDER. A GTIN match beats a name match, and
 --      a GTIN already claimed by another product is never stolen.
---   6. ONE BAD ROW COSTS ONE ROW. A malformed record is reported and skipped;
+--   6. A CONCEPT HAS NO BARCODE. A commercial record that folds onto a generic
+--      row by name merges into it without handing it its GTIN.
+--   7. ONE BAD ROW COSTS ONE ROW. A malformed record is reported and skipped;
 --      the rest of the batch lands.
---   7. NO CLIENT MAY CALL IT.
+--   8. NO CLIENT MAY CALL IT.
 
 begin;
-select plan(47);
+select plan(49);
 
 -- Start from an empty catalog, whatever this database happens to hold. Rolled
 -- back with everything else, so a development database that has been seeded is
@@ -205,13 +207,41 @@ select is(
   'nor blank a field it does not know about'
 );
 
--- ─── 4. identity ordering ────────────────────────────────────────────────────
+-- ─── 4. a concept has no barcode ─────────────────────────────────────────────
+-- Open Food Facts holds real packs named exactly 'Feta', 'Parmesan' or 'Milk'.
+-- Folding one onto the curated concept is the right merge; handing the concept
+-- its code is not, because lookup_barcode() would then answer a scan with the
+-- word on the list rather than the pack in your hand.
+
+delete from res;
+insert into res select public.catalog_import_products($json$[
+  {"type": "commercial", "name": "Milk", "lang": "en",
+   "gtins": ["5940000000017"], "source_id": "off-milk-pack"}
+]$json$::jsonb, 'openfoodfacts');
+
+-- Zero rather than one is the whole assertion: had the row failed to fold it
+-- would have become its own product and recorded the barcode there.
+select is(
+  (select (r->>'identifiers_added')::int from res),
+  0,
+  'a barcode arriving on a generic row is dropped, not recorded'
+);
+
+select is(
+  (select count(*)::int from public.catalog_identifiers i
+     join public.catalog_products p on p.id = i.product_id
+    where p.normalized_name = 'milk'),
+  0,
+  'the concept still carries no identifier'
+);
+
+-- ─── 5. identity ordering ────────────────────────────────────────────────────
 -- A row whose NAME matches one product and whose GTIN matches another belongs to
 -- the GTIN's (§12: an exact identifier outranks a strong name).
 
 delete from res;
 insert into res select public.catalog_import_products($json$[
-  {"type": "generic", "name": "Bread", "lang": "en", "category": "bakery",
+  {"type": "commercial", "name": "Bread", "lang": "en", "category": "bakery",
    "gtins": ["5941234567890"], "source_id": "bread", "weight": 90}
 ]$json$::jsonb, 'curated');
 
@@ -238,7 +268,7 @@ select is(
   'a rename that would collide with another product is declined, not attempted'
 );
 
--- ─── 5. a claimed GTIN is never stolen ───────────────────────────────────────
+-- ─── 6. a claimed GTIN is never stolen ───────────────────────────────────────
 
 delete from res;
 insert into res select public.catalog_import_products($json$[
@@ -252,7 +282,7 @@ select is(
   'the already-claimed barcode still points at the product that claimed it'
 );
 
--- ─── 6. one bad row costs one row ────────────────────────────────────────────
+-- ─── 7. one bad row costs one row ────────────────────────────────────────────
 
 delete from res;
 insert into res select public.catalog_import_products($json$[
@@ -277,7 +307,7 @@ select ok(
   'Eggs is not, because its category has no translations'
 );
 
--- ─── 7. reachability ─────────────────────────────────────────────────────────
+-- ─── 8. reachability ─────────────────────────────────────────────────────────
 
 select throws_ok(
   $$select public.catalog_import_products('[]'::jsonb, 'some-scraper')$$,
@@ -297,7 +327,7 @@ select throws_ok(
 
 reset role;
 
--- ─── 8. taking a curated row back out ────────────────────────────────────────
+-- ─── 9. taking a curated row back out ────────────────────────────────────────
 -- The seed file is the authority for curated rows, and it was only half an
 -- authority until this existed: adding an entry created a row and removing one
 -- left the row behind forever. Fifty concepts were dropped from the seed in one

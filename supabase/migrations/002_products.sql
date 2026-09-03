@@ -399,6 +399,104 @@ create unique index if not exists catalog_identifiers_value_key
 create index if not exists catalog_identifiers_product
   on public.catalog_identifiers (product_id);
 
+-- ─── a concept has no barcode ────────────────────────────────────────────────
+-- 'Feta' is what somebody writes on a shopping list. The pack they pick up has
+-- a code on it; the word does not. Nineteen generic rows in the live catalog
+-- had collected one anyway, 'Feta' eleven of them, and the route in was not a
+-- mistake anybody made by hand:
+--
+--   catalog_import_products() in 003 resolves identity by GTIN and then by
+--   folded name (§12). Open Food Facts holds real packs named exactly 'Feta',
+--   'Parmesan' and 'Spaghetti', so those fold onto the curated concept. THE
+--   MERGE IS RIGHT -- a second row called 'Feta' would be a duplicate of the
+--   concept -- but the identifier arriving with it is not, because
+--   lookup_barcode() resolves through this table and nowhere else. Eleven
+--   different feta packs all scanned as the word 'Feta', which is the answer
+--   the shopper already had.
+--
+-- Enforced here rather than restated in each writer. There are three (the
+-- importer in 003, and the admin's create and update in 009), all of them
+-- reachable with a barcode and a type, and a rule copied into three places is a
+-- rule that will hold in two of them.
+--
+-- 003 still skips the identifier for a generic row instead of relying on this,
+-- and that is not redundant: an exception there is caught by the per-row handler
+-- and costs the whole row, so the concept would lose the merge as well as the
+-- code. Import drops the code quietly; a person typing one into the admin form
+-- gets told why.
+--
+-- GTINs ONLY, and this table holds part numbers too. A concept has no
+-- manufacturer, so it has no part number either, but no writer sets one and no
+-- reader resolves through one: lookup_barcode() reads gtin rows and nothing
+-- else, which is where the whole harm was. Widening this later is a one-word
+-- change; guessing wide now would refuse rows nobody has ever written.
+
+-- ─── the strays ──────────────────────────────────────────────────────────────
+-- Runs on every reset and every repaired push, and is a no-op once there is
+-- nothing left to clear. The products keep everything else the merge gave them.
+delete from public.catalog_identifiers ci
+using public.catalog_products p
+where p.id = ci.product_id
+  and p.product_type = 'generic'
+  and ci.identifier_type = 'gtin';
+
+-- ─── no identifier may point at a concept ────────────────────────────────────
+create or replace function public.catalog_identifiers_not_generic()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if new.identifier_type = 'gtin' and exists (
+    select 1 from public.catalog_products p
+    where p.id = new.product_id and p.product_type = 'generic'
+  ) then
+    raise exception 'A generic product is a concept, so it cannot carry a barcode.'
+      using errcode = 'P0001', detail = 'generic_has_no_barcode';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists catalog_identifiers_not_generic on public.catalog_identifiers;
+create trigger catalog_identifiers_not_generic
+  before insert or update of product_id on public.catalog_identifiers
+  for each row execute function public.catalog_identifiers_not_generic();
+
+-- ─── nor may a product turn generic while it holds one ───────────────────────
+-- The other half of the same rule, and the half that is easy to forget: without
+-- it the invariant is only true of rows that never changed type.
+--
+-- It refuses rather than deleting the codes, because turning a product into a
+-- concept is a judgement and the barcode is the evidence against it. The admin
+-- form clears the field as part of the same save, so the two arrive together
+-- and the update in 009 applies the barcode before the type, so the code is
+-- already gone by the time this fires.
+create or replace function public.catalog_products_not_generic_with_identifier()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if new.product_type = 'generic'
+     and exists (
+       select 1 from public.catalog_identifiers i
+       where i.product_id = new.id and i.identifier_type = 'gtin'
+     )
+  then
+    raise exception 'That product has a barcode, so it cannot become generic. Clear the barcode first.'
+      using errcode = 'P0001', detail = 'generic_has_no_barcode';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists catalog_products_not_generic_with_identifier on public.catalog_products;
+create trigger catalog_products_not_generic_with_identifier
+  before update of product_type on public.catalog_products
+  for each row when (new.product_type = 'generic' and old.product_type is distinct from 'generic')
+  execute function public.catalog_products_not_generic_with_identifier();
+
 -- ─── provenance ──────────────────────────────────────────────────────────────
 -- Where each row came from, kept for as long as the row exists.
 --
