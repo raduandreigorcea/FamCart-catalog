@@ -78,6 +78,7 @@ declare
   v_markets text[];
   v_curated boolean;
   v_name_taken boolean;
+  v_generic boolean;
 
   n_ins    integer := 0;
   n_upd    integer := 0;
@@ -155,7 +156,7 @@ begin
           case when p_source = 'curated' then coalesce((r->>'weight')::integer, 0) else 0 end,
           p_concept_id
         )
-        returning id into v_id;
+        returning id, product_type = 'generic' into v_id, v_generic;
         n_ins := n_ins + 1;
 
       -- ── update ────────────────────────────────────────────────────────────
@@ -216,7 +217,8 @@ begin
           concept_id = coalesce(p.concept_id, p_concept_id)
           -- add_count is absent from this SET list on purpose. It is the one
           -- column an import may never touch: it is what real people earned.
-        where p.id = v_id;
+        where p.id = v_id
+        returning (p.product_type = 'generic') into v_generic;
         n_upd := n_upd + 1;
       end if;
 
@@ -244,15 +246,27 @@ begin
       -- A GTIN already claimed by another product is left alone rather than
       -- moved. Two products disagreeing about one barcode is a fact about the
       -- upstream data, and the first claim is the one with evidence behind it.
-      foreach g in array v_gtins
-      loop
-        if g ~ '^[0-9]{8,14}$' then
-          insert into public.catalog_identifiers (product_id, identifier_value, source)
-          values (v_id, g, p_source)
-          on conflict do nothing;
-          if found then n_ident := n_ident + 1; end if;
-        end if;
-      end loop;
+      --
+      -- A GENERIC ROW NEVER TAKES ONE. It is a shopping concept, not a pack:
+      -- 'Feta' is what somebody writes on a list, and no barcode identifies it.
+      -- The name rung above cannot tell the two apart, because Open Food Facts
+      -- holds real packs named exactly 'Feta', 'Parmesan' and 'Spaghetti'; those
+      -- fold onto the curated concept and used to hand it their codes. Eleven
+      -- feta packs then all resolved through lookup_barcode() to the concept,
+      -- so a scan answered with the word rather than the thing in your hand.
+      -- Dropping the code costs nothing: the merge itself is still right, and
+      -- the product keeps its own row upstream to be discovered on its name.
+      if not v_generic then
+        foreach g in array v_gtins
+        loop
+          if g ~ '^[0-9]{8,14}$' then
+            insert into public.catalog_identifiers (product_id, identifier_value, source)
+            values (v_id, g, p_source)
+            on conflict do nothing;
+            if found then n_ident := n_ident + 1; end if;
+          end if;
+        end loop;
+      end if;
 
       -- ── provenance ────────────────────────────────────────────────────────
       -- Not bookkeeping: Open Food Facts is ODbL, so which rows came from it is

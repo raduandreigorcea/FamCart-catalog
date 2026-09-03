@@ -368,6 +368,13 @@ select is(
 
 -- ─── barcodes ────────────────────────────────────────────────────────────────
 
+-- A barcode belongs to a pack, not to the word on the list, and a code on a
+-- concept is refused. These two have played the part of concepts for every search
+-- assertion above; from here they are the packs that carry the codes. Nothing
+-- below reads their type.
+update public.catalog_products set product_type = 'commercial'
+ where id in ('00000000-0000-0000-0000-0000000000c1', '00000000-0000-0000-0000-0000000000c2');
+
 insert into public.catalog_identifiers (product_id, identifier_value, source) values
   ('00000000-0000-0000-0000-0000000000c1', '5941234567890', 'curated'),
   ('00000000-0000-0000-0000-0000000000c2', '05941234567890', 'curated');

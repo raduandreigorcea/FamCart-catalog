@@ -34,7 +34,7 @@
 -- Everything runs inside a rolled-back transaction, so it leaves no rows.
 
 begin;
-select plan(52);
+select plan(54);
 
 -- Start from an empty catalog, whatever this database happens to hold. Rolled
 -- back with everything else, so a development database that has been seeded is
@@ -100,6 +100,11 @@ values ('00000000-0000-0000-0000-00000000a001', 'generic', '  Apă   Plată ', '
 
 insert into public.catalog_products (id, product_type, canonical_name, name_lang, brand, quantity, quantity_unit)
 values ('00000000-0000-0000-0000-00000000a002', 'commercial', 'Pepsi Zero 500ml', 'en', 'Pepsi', 500, 'ml');
+
+-- The rival claimant in section 5. It has to be commercial: a GTIN on a concept
+-- is refused, so a001 can no longer stand in for "some other product".
+insert into public.catalog_products (id, product_type, canonical_name, name_lang, brand)
+values ('00000000-0000-0000-0000-00000000a003', 'commercial', 'Cola Zero 500ml', 'en', 'Acme');
 
 -- ─── 2. derived columns ──────────────────────────────────────────────────────
 
@@ -245,7 +250,7 @@ values ('00000000-0000-0000-0000-00000000a002', '4060800104', 'openfoodfacts');
 
 select throws_ok(
   $$insert into public.catalog_identifiers (product_id, identifier_value, source)
-    values ('00000000-0000-0000-0000-00000000a001', '4060800104', 'curated')$$,
+    values ('00000000-0000-0000-0000-00000000a003', '4060800104', 'curated')$$,
   '23505',
   null,
   'a GTIN names one product globally'
@@ -259,7 +264,7 @@ select lives_ok(
 
 select throws_ok(
   $$insert into public.catalog_identifiers (product_id, identifier_value, source)
-    values ('00000000-0000-0000-0000-00000000a001', 'ABC123', 'curated')$$,
+    values ('00000000-0000-0000-0000-00000000a003', 'ABC123', 'curated')$$,
   '23514',
   null,
   'a GTIN that is not digits is not a GTIN'
@@ -267,10 +272,30 @@ select throws_ok(
 
 select throws_ok(
   $$insert into public.catalog_identifiers (product_id, identifier_value, source)
-    values ('00000000-0000-0000-0000-00000000a001', '123', 'curated')$$,
+    values ('00000000-0000-0000-0000-00000000a003', '123', 'curated')$$,
   '23514',
   null,
   'a code too short for any GTIN standard is rejected'
+);
+
+-- A generic row is a shopping concept and a concept has no barcode: the
+-- word 'Feta' is not what is printed on any pack of it. Enforced here rather
+-- than in each of the three writers, because a rule copied three times holds in
+-- two of them.
+select throws_ok(
+  $$insert into public.catalog_identifiers (product_id, identifier_value, source)
+    values ('00000000-0000-0000-0000-00000000a001', '5949000000109', 'curated')$$,
+  'P0001',
+  'A generic product is a concept, so it cannot carry a barcode.',
+  'a generic product cannot carry a GTIN at all'
+);
+
+select throws_ok(
+  $$update public.catalog_products set product_type = 'generic'
+     where id = '00000000-0000-0000-0000-00000000a002'$$,
+  'P0001',
+  'That product has a barcode, so it cannot become generic. Clear the barcode first.',
+  'nor may one that carries a GTIN be turned into a concept'
 );
 
 select lives_ok(

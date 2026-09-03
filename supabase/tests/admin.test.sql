@@ -24,7 +24,7 @@
 --      leading nowhere.
 
 begin;
-select plan(60);
+select plan(65);
 
 delete from public.catalog_products;
 delete from public.catalog_admins;
@@ -37,7 +37,7 @@ set local role authenticated;
 set local request.jwt.claims = '{"sub":"ordinary_user"}';
 
 select throws_ok(
-  -- No arguments rather than a positional list. 011 put five text filters
+  -- No arguments rather than a positional list. The filter arguments put five
   -- between p_type and p_limit, so `(null, null, 25, 0)` now offers 25 as a
   -- market code and fails on the wrong thing.
   $t$ select * from public.catalog_admin_products() $t$,
@@ -66,7 +66,7 @@ set local request.jwt.claims = '{"sub":"admin_user"}';
 
 select lives_ok(
   $t$ select public.catalog_admin_create_product(
-        'Rice Cakes', 'generic', 'en', null, null, array['RO','DE'], '5949000000017', 3) $t$,
+        'Rice Cakes', 'commercial', 'en', null, null, array['RO','DE'], '5949000000017', 3) $t$,
   'an admin creates a catalog product'
 );
 
@@ -206,7 +206,7 @@ set local request.jwt.claims = '{"sub":"admin_user"}';
 select lives_ok(
   $t$ select public.catalog_admin_update_product(
         (select id from public.catalog_products where canonical_name = 'Rice Cakes'),
-        'Rice Cake', 'generic', 'en', null, null, null, null) $t$,
+        'Rice Cake', 'commercial', 'en', null, null, null, null) $t$,
   'an admin renames a product'
 );
 
@@ -263,7 +263,7 @@ select lives_ok(
   'deleting a product that is already gone is a no-op, not an error'
 );
 
--- ── 7. Editing everything (010_admin_edit_everything.sql) ────────────────────
+-- ── 7. Editing everything ──────────────────────────────────────────────────
 -- The columns 009 left unreachable, and the one convention that governs all of
 -- them: null leaves a column alone, an empty string clears it, anything else
 -- sets it. The convention is the thing worth pinning -- an update that omits a
@@ -570,6 +570,62 @@ select lives_ok(
         'Rival Thing', 'commercial', 'en', null, null, null, null,
         '4000000000045') $t$,
   'a product may be saved with the barcode it already has'
+);
+
+-- ── 10. A concept has no barcode (002_products.sql) ────────────────────────
+-- Enforced on the identifier table, so it holds for the importer as well as for
+-- the two functions above. The importer drops the code and keeps the merge;
+-- somebody typing one into the form is told why instead.
+
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"admin_user"}';
+
+select throws_ok(
+  $t$ select public.catalog_admin_create_product(
+        'Feta', 'generic', 'en', null, null, array['RO'], '5949000000024', 0) $t$,
+  'P0001',
+  'A generic product is a concept, so it cannot carry a barcode.',
+  'a generic product cannot be created with a barcode'
+);
+
+reset role;
+
+-- Refused as one statement, so the product does not linger without it.
+select is(
+  (select count(*)::int from public.catalog_products where canonical_name = 'Feta'),
+  0,
+  'and the row it would have hung off is not left behind'
+);
+
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"admin_user"}';
+
+-- The half that is easy to forget: the type can move under an existing code.
+select throws_ok(
+  $t$ select public.catalog_admin_update_product(
+        '00000000-0000-0000-0000-0000000000e2'::uuid,
+        'Rival Thing', 'generic', 'en') $t$,
+  'P0001',
+  'That product has a barcode, so it cannot become generic. Clear the barcode first.',
+  'nor may a product carrying one be turned into a concept'
+);
+
+-- Which is what the form sends: the barcode field is cleared by the same save
+-- that changes the type, and the RPC applies the barcode before the type.
+select lives_ok(
+  $t$ select public.catalog_admin_update_product(
+        '00000000-0000-0000-0000-0000000000e2'::uuid,
+        'Rival Thing', 'generic', 'en', null, null, null, null, '') $t$,
+  'clearing the barcode in the same save is what makes the change legal'
+);
+
+reset role;
+
+select is(
+  (select count(*)::int from public.catalog_identifiers
+   where product_id = '00000000-0000-0000-0000-0000000000e2'),
+  0,
+  'and the concept ends up with no identifier at all'
 );
 
 select * from finish();
