@@ -1,0 +1,29 @@
+User-agent: *
+
+# Disable user pages
+Disallow: /customer
+Disallow: /new_checkout
+Disallow: /wishlist
+Disallow: /mycarrefour
+
+
+# Disable Search pages
+Disallow: /catalogsearch
+Disallow: /*&|*
+
+# Disable parameters
+Disallow: /*fbclid*
+Disallow: /*order=*
+Disallow: /*]=*
+
+
+# Disable Magento Standard
+Disallow: /catalog/product
+Disallow: /new_catalog/product
+
+# Errors
+Disallow: */produse/*/corporate/
+Disallow: /*ajax/
+Disallow: /*Ajax/
+
+Sitemap: https://carrefour.ro/pub/sitemap/sitemap.xml
