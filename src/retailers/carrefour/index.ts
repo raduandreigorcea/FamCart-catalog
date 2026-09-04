@@ -112,7 +112,7 @@ export class CarrefourScraper implements RetailerScraper {
     // per second is the pace a shop should not notice; going faster to finish a
     // ten-hour job in five is exactly the trade this repository does not make.
     const http = new HttpClient({
-      minIntervalMs: 1000,
+      minIntervalMs: ctx.minIntervalMs ?? 1000,
       timeoutMs: 45_000,
       retries: 2,
       fetchImpl: ctx.fetchImpl,

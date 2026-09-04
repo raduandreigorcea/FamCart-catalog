@@ -76,7 +76,9 @@ export async function collectSitemapEntries(
       continue
     }
 
-    const xml = maybeGunzip(response.body)
+    // From the BYTES: a .xml.gz is a gzip file with no content-encoding
+    // header, so the string form is already mojibake by this point.
+    const xml = maybeGunzip(response.bytes)
     const nested = parseSitemapIndex(xml)
     if (nested.length > 0) {
       for (const child of nested) {

@@ -99,7 +99,7 @@ export class LidlScraper implements RetailerScraper {
 
   async *discoverProducts(ctx: ScrapeContext): AsyncGenerator<RetailerProduct> {
     const http = new HttpClient({
-      minIntervalMs: 1000,
+      minIntervalMs: ctx.minIntervalMs ?? 1000,
       timeoutMs: 45_000,
       retries: 2,
       fetchImpl: ctx.fetchImpl,

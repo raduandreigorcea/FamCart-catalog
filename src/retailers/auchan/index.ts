@@ -55,7 +55,7 @@ export class AuchanScraper implements RetailerScraper {
     // than a page crawl -- but not much: the metadata endpoints are proof that
     // there is a budget and that it is not generous.
     const http = new HttpClient({
-      minIntervalMs: 400,
+      minIntervalMs: ctx.minIntervalMs ?? 400,
       timeoutMs: 30_000,
       retries: 3,
       fetchImpl: ctx.fetchImpl,
@@ -116,7 +116,9 @@ export class AuchanScraper implements RetailerScraper {
   /** The category list, when the rate limit allows it. Never fatal. */
   private async seedFromTree(http: HttpClient, ctx: ScrapeContext): Promise<string[]> {
     try {
-      const response = await http.get(`${API}/category/tree/3`)
+      // tolerant: this endpoint's 429 must not condemn the host for the
+      // product endpoint, which is the whole reason the crawl can work without it.
+      const response = await http.get(`${API}/category/tree/3`, {}, { tolerant: true })
       if (!response.ok) {
         ctx.log.warn('auchan category tree unavailable; learning categories from products instead', {
           status: response.status,
