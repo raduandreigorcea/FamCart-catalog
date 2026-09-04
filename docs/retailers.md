@@ -72,9 +72,17 @@ for the endpoint it does.
 **carrefour.ro**, Magento.
 
 Discovery is the sitemap index at `/pub/sitemap/sitemap.xml`, which holds two
-files: `sitemap_001.xml` (about 600 category pages, filtered out) and
-`sitemap_002.xml` (**38,559 product URLs**, each with a `<lastmod>` and
-`changefreq: daily`).
+files: `sitemap_001.xml` (50,000 URLs, 46,757 of them products) and
+`sitemap_002.xml` (38,559, all products). **85,121 product URLs** in total, each
+with a `<lastmod>` and `changefreq: daily`; the remaining ~3,400 are department
+pages and are filtered out by URL rather than fetched to discover they carry no
+product.
+
+That count is worth stating carefully, because reading the index by eye gets it
+wrong. The first file looks like a category sitemap from its opening entries --
+they are all `/tex/`, `/it-c/`, `/auto-moto-brico/` departments -- and it was
+documented as "about 600 category pages" until a live crawl counted it. It is
+mostly products, and it more than doubles the size of this scrape.
 
 Each product page carries exactly one `application/ld+json` block of
 `@type: Product`:
@@ -110,10 +118,11 @@ challenge.
   slug. The scraper recognises a few department words and returns null otherwise,
   which is honest — a guessed shelf is invisible, a null one is findable in the
   admin dashboard.
-- **Cost.** 38,559 pages at ~300 KB and one request per second is a bit over ten
-  hours and ~11 GB for a first run. Later runs are incremental on `lastmod`;
-  about 25,000 of those URLs moved in the last month, so a daily run is a few
-  thousand pages.
+- **Cost, and it is the real constraint here.** 85,121 pages at ~300 KB and one
+  request per second is about **24 hours and ~25 GB** for a first run. That is a
+  job to start deliberately, not something to run from a test. Later runs are
+  incremental on `lastmod`, which is why that field matters more for this shop
+  than for the other two.
 - A delisted product returns **404 with no Product block**. That is recorded as
   "delisted" and, importantly, does *not* mark anything unavailable — absence is
   the sweep's business, once, after a complete run.

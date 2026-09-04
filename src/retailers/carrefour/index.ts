@@ -6,10 +6,17 @@
 // That is Carrefour saying no to that door, so we use the front one: the product
 // pages, which are public, indexed, and allowed by robots.txt.
 //
-// WHAT IT COSTS. 38,559 product URLs. At one request a second that is a bit over
-// ten hours for a first run. Every subsequent run is incremental: the sitemap
-// carries <lastmod> on every entry, and only a few thousand move on a given day.
-// This is the one scraper here where --since is not a nicety.
+// WHAT IT COSTS, AND IT IS MORE THAN IT LOOKS. 85,121 product URLs across the
+// index's two files. At one request a second that is about a day and ~25 GB for
+// a first run, so it is a job to start deliberately.
+//
+// The count is easy to get wrong by reading: sitemap_001 opens with hundreds of
+// department pages and looks like a category sitemap, and was documented as
+// "about 600 category pages" until a live crawl counted 50,000 URLs in it, 46,757
+// of them products. Only sitemap_002 is purely products.
+//
+// Every subsequent run is incremental -- the sitemap carries <lastmod> on every
+// entry -- which is why --since matters more for this shop than for the others.
 //
 // WHAT IS MISSING, PERMANENTLY. Carrefour publishes no GTIN. Not a wrong one, not
 // an empty one -- the field is absent from every Product block on the site. So a
