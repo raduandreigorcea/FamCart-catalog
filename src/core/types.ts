@@ -79,6 +79,13 @@ export interface ScrapeContext {
   log: Logger
   /** Injected so tests can drive a scraper entirely from test/fixtures/. */
   fetchImpl?: typeof fetch
+  /**
+   * Override the per-host request gap, in milliseconds. TEST SEAM ONLY -- the
+   * CLI never sets it, so the polite default in each scraper is what a real run
+   * uses. It exists because a fixture-driven test would otherwise spend a real
+   * second per page proving something about parsing.
+   */
+  minIntervalMs?: number
   signal?: AbortSignal
 }
 

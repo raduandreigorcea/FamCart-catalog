@@ -38,6 +38,18 @@ export interface HttpResponse {
   status: number
   ok: boolean
   body: string
+  /**
+   * The undecoded bytes.
+   *
+   * Needed because a .xml.gz sitemap is a GZIP FILE, not a gzip-encoded
+   * response: there is no content-encoding header, so fetch does not decompress
+   * it, and reading it as text turns the bytes into replacement characters
+   * before anything can sniff the magic number. Lidl's product sitemap is
+   * exactly this, and reading only `body` made it parse as zero URLs -- which
+   * the run correctly refused to sweep on, and which would otherwise have been a
+   * scraper that silently found nothing every night.
+   */
+  bytes: Uint8Array
   /** Headers a caller actually reads; VTEX puts its paging total in one. */
   headers: Headers
   url: string
@@ -106,13 +118,24 @@ export class HttpClient {
    * scraper wants (Carrefour 404s a delisted product), not an exception. Throws
    * only when the request could not be completed at all, or when the host's
    * circuit is open.
+   *
+   * `tolerant` is for a request the caller can do without. Its failures do not
+   * count toward the breaker and it is not retried.
+   *
+   * THAT DISTINCTION IS NOT A NICETY. Auchan rate-limits /category/tree,
+   * /brand/list and /facets on a much smaller budget than /products/search, and
+   * they 429 for tens of minutes while the product endpoint answers normally.
+   * With one breaker per host and no tolerant mode, four refusals from an
+   * OPTIONAL endpoint open the circuit for the host and kill a crawl that was
+   * working -- which is precisely the failure the Auchan scraper is built to
+   * survive. Found by its own test.
    */
-  async get(url: string, init: RequestInit = {}): Promise<HttpResponse> {
+  async get(url: string, init: RequestInit = {}, opts: { tolerant?: boolean } = {}): Promise<HttpResponse> {
     const host = hostOf(url)
     const previous = this.queues.get(host) ?? Promise.resolve()
     const task = previous.then(
-      () => this.perform(url, init, host),
-      () => this.perform(url, init, host),
+      () => this.perform(url, init, host, opts.tolerant === true),
+      () => this.perform(url, init, host, opts.tolerant === true),
     )
     // The queue holds a promise that never rejects, so one failed request does
     // not poison every request queued behind it on the same host.
@@ -120,8 +143,14 @@ export class HttpClient {
     return task
   }
 
-  private async perform(url: string, init: RequestInit, host: string): Promise<HttpResponse> {
+  private async perform(
+    url: string,
+    init: RequestInit,
+    host: string,
+    tolerant: boolean,
+  ): Promise<HttpResponse> {
     const state = this.stateOf(host)
+    const retries = tolerant ? 0 : this.retries
 
     if (state.openUntil > this.now()) {
       throw new CircuitOpenError(host)
@@ -132,7 +161,7 @@ export class HttpClient {
 
     let lastError: unknown = null
 
-    for (let attempt = 0; attempt <= this.retries; attempt++) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
       // A FRESH CONTROLLER PER ATTEMPT. Reusing one means the first attempt's
       // timeout aborts every retry before it starts, which looks exactly like a
       // host that is down and is the reason this comment exists.
@@ -147,11 +176,14 @@ export class HttpClient {
           signal: controller.signal,
           headers: { 'user-agent': this.userAgent, ...(init.headers ?? {}) },
         })
-        const body = await response.text()
+        // arrayBuffer, then decode: text() would be lossy for the gzip files.
+        const bytes = new Uint8Array(await response.arrayBuffer())
+        const body = new TextDecoder('utf-8').decode(bytes)
         state.nextAllowedAt = this.now() + this.minIntervalMs
 
         // 429 and 5xx are the shop asking for room. Back off and try again.
         if (response.status === 429 || response.status >= 500) {
+          if (tolerant) return toResponse(response, body, bytes, url)
           state.failures++
           if (state.failures >= this.tripAfter) {
             state.openUntil = this.now() + this.cooldownMs
@@ -159,7 +191,7 @@ export class HttpClient {
             throw new CircuitOpenError(host)
           }
           lastError = new Error(`HTTP ${response.status} for ${url}`)
-          if (attempt < this.retries) {
+          if (attempt < retries) {
             // Honour Retry-After when it is given; Auchan gives none, so the
             // exponential ladder is what actually paces it.
             const retryAfter = Number(response.headers.get('retry-after'))
@@ -172,12 +204,12 @@ export class HttpClient {
           }
           // Out of attempts: hand the response back rather than throwing, so the
           // caller can count it and carry on with the rest of the catalog.
-          return toResponse(response, body, url)
+          return toResponse(response, body, bytes, url)
         }
 
         // Anything else, including a 404, is a real answer.
         state.failures = 0
-        return toResponse(response, body, url)
+        return toResponse(response, body, bytes, url)
       } catch (error) {
         if (error instanceof CircuitOpenError) throw error
         // The caller gave up (Ctrl-C, a --limit reached). Not the host's fault,
@@ -185,6 +217,7 @@ export class HttpClient {
         if (init.signal?.aborted) throw error
 
         lastError = error
+        if (tolerant) throw error
         state.failures++
         state.nextAllowedAt = this.now() + this.minIntervalMs
         if (state.failures >= this.tripAfter) {
@@ -192,7 +225,7 @@ export class HttpClient {
           state.failures = 0
           throw new CircuitOpenError(host)
         }
-        if (attempt < this.retries) await this.sleep(500 * 2 ** attempt)
+        if (attempt < retries) await this.sleep(500 * 2 ** attempt)
       } finally {
         clearTimeout(timer)
         init.signal?.removeEventListener('abort', onOuterAbort)
@@ -223,11 +256,12 @@ export async function getJson<T>(client: HttpClient, url: string): Promise<T | n
   }
 }
 
-function toResponse(response: Response, body: string, url: string): HttpResponse {
+function toResponse(response: Response, body: string, bytes: Uint8Array, url: string): HttpResponse {
   return {
     status: response.status,
     ok: response.ok,
     body,
+    bytes,
     headers: response.headers,
     url,
   }
