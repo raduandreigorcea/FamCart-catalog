@@ -1,15 +1,20 @@
 {
   "name": "famcart-catalog",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "The FamCart product catalog: schema, curated seed, and on-demand discovery.",
+  "description": "The FamCart product catalog: what real retailers actually list, scraped, matched and searchable.",
   "scripts": {
+    "scrape": "node --experimental-strip-types src/cli/scrape.ts",
+    "scrape:auchan": "node --experimental-strip-types src/cli/scrape.ts auchan",
+    "scrape:carrefour": "node --experimental-strip-types src/cli/scrape.ts carrefour",
+    "scrape:lidl": "node --experimental-strip-types src/cli/scrape.ts lidl",
+    "scrape:all": "node --experimental-strip-types src/cli/scrape.ts all",
+    "import": "node --experimental-strip-types src/cli/import.ts",
     "test": "vitest run",
     "typecheck": "tsc -p . --noEmit",
     "db:reset": "supabase db reset",
-    "db:test": "supabase db reset && supabase test db",
-    "seed": "node scripts/seed.mjs"
+    "db:test": "supabase db reset && supabase test db"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3"
