@@ -1,0 +1,153 @@
+{
+  "_": [
+    "What catalog_normalize() and catalog_key_fold() in 002_catalog.sql ACTUALLY",
+    "answered, read out of a running Postgres. src/core/normalize.ts is checked",
+    "against this by test/fold.test.ts.",
+    "",
+    "Regenerate with scripts/regenerate-fold-fixture.mjs after any change to either",
+    "SQL function, and READ THE DIFF -- a changed answer here means the merge key",
+    "changed, which means products that used to fold together no longer do."
+  ],
+  "cases": [
+    {
+      "input": "Apă Plată",
+      "fold": "apa plata",
+      "keyFold": "apa plata"
+    },
+    {
+      "input": "Șuncă Țărănească",
+      "fold": "sunca taraneasca",
+      "keyFold": "sunca taraneasca"
+    },
+    {
+      "input": "ÎNGHEȚATĂ",
+      "fold": "inghetata",
+      "keyFold": "inghetata"
+    },
+    {
+      "input": "Ţigări",
+      "fold": "tigari",
+      "keyFold": "tigari"
+    },
+    {
+      "input": "Cașcaval Rucăr",
+      "fold": "cascaval rucar",
+      "keyFold": "cascaval rucar"
+    },
+    {
+      "input": "Pâine de casă",
+      "fold": "paine de casa",
+      "keyFold": "paine de casa"
+    },
+    {
+      "input": "Ouă proaspete",
+      "fold": "oua proaspete",
+      "keyFold": "oua proaspete"
+    },
+    {
+      "input": "Fasole bătută",
+      "fold": "fasole batuta",
+      "keyFold": "fasole batuta"
+    },
+    {
+      "input": "Măsline",
+      "fold": "masline",
+      "keyFold": "masline"
+    },
+    {
+      "input": "Curăţenie",
+      "fold": "curatenie",
+      "keyFold": "curatenie"
+    },
+    {
+      "input": "Müsli Bär",
+      "fold": "musli bar",
+      "keyFold": "musli bar"
+    },
+    {
+      "input": "Crème Brûlée",
+      "fold": "creme brulee",
+      "keyFold": "creme brulee"
+    },
+    {
+      "input": "Nestlé® Cocoa",
+      "fold": "nestle(r) cocoa",
+      "keyFold": "nestle r cocoa"
+    },
+    {
+      "input": "Jalapeño",
+      "fold": "jalapeno",
+      "keyFold": "jalapeno"
+    },
+    {
+      "input": "Straße",
+      "fold": "strasse",
+      "keyFold": "strasse"
+    },
+    {
+      "input": "naïve café",
+      "fold": "naive cafe",
+      "keyFold": "naive cafe"
+    },
+    {
+      "input": "œuf",
+      "fold": "oeuf",
+      "keyFold": "oeuf"
+    },
+    {
+      "input": "Đakovo",
+      "fold": "dakovo",
+      "keyFold": "dakovo"
+    },
+    {
+      "input": "Æther",
+      "fold": "aether",
+      "keyFold": "aether"
+    },
+    {
+      "input": "Piña Colada",
+      "fold": "pina colada",
+      "keyFold": "pina colada"
+    },
+    {
+      "input": "½ litru",
+      "fold": "1/2 litru",
+      "keyFold": "1 2 litru"
+    },
+    {
+      "input": "Coca-Cola   Zero",
+      "fold": "coca-cola zero",
+      "keyFold": "coca cola zero"
+    },
+    {
+      "input": "  spaced  out  ",
+      "fold": "spaced out",
+      "keyFold": "spaced out"
+    },
+    {
+      "input": "Lapte 3,5%",
+      "fold": "lapte 3,5%",
+      "keyFold": "lapte 3 5%"
+    },
+    {
+      "input": "100% natural",
+      "fold": "100% natural",
+      "keyFold": "100% natural"
+    },
+    {
+      "input": "A/B test",
+      "fold": "a/b test",
+      "keyFold": "a b test"
+    },
+    {
+      "input": "Ciocolată 2 × 100 g",
+      "fold": "ciocolata 2 * 100 g",
+      "keyFold": "ciocolata 2 100 g"
+    },
+    {
+      "input": "L'Or Espresso",
+      "fold": "l'or espresso",
+      "keyFold": "l or espresso"
+    }
+  ]
+}

@@ -1,0 +1,167 @@
+#!/usr/bin/env node
+// Regenerate src/core/unaccent.generated.ts and test/fixtures/fold.json from a
+// RUNNING local Postgres.
+//
+// THE PROBLEM THIS SOLVES. The fold -- lowercase, strip accents, collapse
+// whitespace -- exists in three runtimes and cannot be written once:
+// catalog_normalize() in 002_catalog.sql, fold() in src/core/normalize.ts, and
+// normalizeSearchText() in the app's browser code. Postgres does it with
+// unaccent, which is a DICTIONARY. JavaScript does it with NFD plus a combining
+// mark strip, which is an ALGORITHM. An algorithm can only remove marks, so it
+// leaves ß, œ, æ, đ, ½, ® and × exactly as it found them, where the dictionary
+// turns them into ss, oe, ae, d, 1/2, (r) and *.
+//
+// Two files come out of that, and both are read out of the database rather than
+// written by hand:
+//
+//   src/core/unaccent.generated.ts  the expansions, so the TypeScript can agree
+//   test/fixtures/fold.json         what the SQL answered, so a test can check
+//
+// Usage, from the catalog root, with the local stack up:
+//
+//   supabase db reset && node scripts/regenerate-fold-fixture.mjs
+//
+// Then READ THE DIFF. A changed answer means a changed merge key, which means
+// products that used to fold together no longer do.
+
+import { execFileSync } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
+const CONTAINER = process.env.CATALOG_DB_CONTAINER ?? 'supabase_db_famcart-catalog'
+const SEP = ''
+
+// Chosen for the ways a fold can be wrong rather than for coverage: Romanian
+// comma-below letters (a different codepoint from the cedilla ones, and mixed
+// freely on retail sites), ligatures, symbols that expand to more than one
+// character, and the whitespace cases.
+const CASES = [
+  'Apă Plată', 'Șuncă Țărănească', 'ÎNGHEȚATĂ', 'Ţigări', 'Cașcaval Rucăr',
+  'Pâine de casă', 'Ouă proaspete', 'Fasole bătută', 'Măsline', 'Curăţenie',
+  'Müsli Bär', 'Crème Brûlée', 'Nestlé® Cocoa', 'Jalapeño', 'Straße',
+  'naïve café', 'œuf', 'Đakovo', 'Æther', 'Piña Colada',
+  '½ litru', 'Coca-Cola   Zero', '  spaced  out  ', 'Lapte 3,5%',
+  '100% natural', 'A/B test', 'Ciocolată 2 × 100 g', "L'Or Espresso",
+]
+
+// The blocks a European retail string can draw from: Latin-1 Supplement through
+// Latin Extended-B, general punctuation, currency symbols, letterlike symbols
+// and the vulgar fractions.
+const RANGES = [
+  [0x00a0, 0x0180],
+  [0x0180, 0x0250],
+  [0x2010, 0x2060],
+  [0x20a0, 0x20c0],
+  [0x2100, 0x2200],
+]
+
+function ask(sql) {
+  return execFileSync(
+    'docker',
+    ['exec', '-i', CONTAINER, 'psql', '-U', 'postgres', '-d', 'postgres',
+      '-X', '-A', '-t', '-F', SEP, '-c', sql],
+    { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 },
+  )
+}
+
+function rows(output) {
+  return output.split('\n').filter((line) => line.length > 0).map((line) => line.split(SEP))
+}
+
+function values(items) {
+  return items.map((item) => `($case$${item}$case$)`).join(', ')
+}
+
+function nfdFold(text) {
+  return text.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
+    .replace(/\s+/g, ' ').trim()
+}
+
+let foldRows
+let tableRows
+try {
+  // One round trip each. Twenty-eight `docker exec` calls take twenty seconds;
+  // one takes none, and the ordering is guaranteed by the query.
+  foldRows = rows(ask(
+    `select t.s, public.catalog_normalize(t.s), public.catalog_key_fold(t.s)
+       from (values ${values(CASES)}) as t(s)`,
+  ))
+
+  const chars = []
+  for (const [start, end] of RANGES) {
+    for (let code = start; code < end; code++) {
+      const ch = String.fromCodePoint(code)
+      // A character that is only whitespace tells us nothing: the fold collapses
+      // it either way, and $case$ quoting of a bare newline is asking for
+      // trouble.
+      if (ch.trim()) chars.push(ch)
+    }
+  }
+  tableRows = rows(ask(
+    `select t.c, public.catalog_normalize(t.c) from (values ${values(chars)}) as t(c)`,
+  )).filter(([ch, folded]) => ch !== undefined && nfdFold(ch) !== folded)
+} catch (error) {
+  process.stderr.write(
+    'Could not reach the local catalog database.\n' +
+    'Start it first:  supabase --workdir catalog start && supabase --workdir catalog db reset\n\n' +
+    String(error?.stderr ?? error) + '\n',
+  )
+  process.exit(1)
+}
+
+if (foldRows.length !== CASES.length) {
+  process.stderr.write(`expected ${CASES.length} fold rows, got ${foldRows.length}\n`)
+  process.exit(1)
+}
+
+// ── the expansion table ─────────────────────────────────────────────────────
+// The WHOLE disagreement is written out, not a chosen subset. Picking "the ones
+// that matter" is how you end up with a fold that is right for the characters
+// somebody thought of and wrong for the first Polish brand that turns up.
+const entries = tableRows
+  .map(([ch, folded]) => {
+    const code = ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')
+    return `  '\\u${code}': ${JSON.stringify(folded)},`
+  })
+  .join('\n')
+
+const header = [
+  '// GENERATED by scripts/regenerate-fold-fixture.mjs. Do not edit by hand.',
+  '//',
+  "// Every character where Postgres' unaccent() disagrees with NFD plus a",
+  '// combining-mark strip, and what unaccent turns it into. This is what lets',
+  '// fold() in normalize.ts answer the same as catalog_normalize() in',
+  '// 002_catalog.sql, which is what lets a scraper and the database agree about',
+  '// whether two products are one product.',
+  '//',
+  `// ${tableRows.length} entries, read out of a running database rather than chosen.`,
+  '',
+  'export const UNACCENT: Record<string, string> = {',
+].join('\n')
+
+writeFileSync(
+  fileURLToPath(new URL('../src/core/unaccent.generated.ts', import.meta.url)),
+  `${header}\n${entries}\n}\n`,
+  'utf8',
+)
+process.stdout.write(`wrote ${tableRows.length} expansions to src/core/unaccent.generated.ts\n`)
+
+const doc = {
+  _: [
+    'What catalog_normalize() and catalog_key_fold() in 002_catalog.sql ACTUALLY',
+    'answered, read out of a running Postgres. src/core/normalize.ts is checked',
+    'against this by test/fold.test.ts.',
+    '',
+    'Regenerate with scripts/regenerate-fold-fixture.mjs after any change to either',
+    'SQL function, and READ THE DIFF -- a changed answer here means the merge key',
+    'changed, which means products that used to fold together no longer do.',
+  ],
+  cases: foldRows.map(([input, fold, keyFold]) => ({ input, fold, keyFold })),
+}
+
+writeFileSync(
+  fileURLToPath(new URL('../test/fixtures/fold.json', import.meta.url)),
+  `${JSON.stringify(doc, null, 2)}\n`,
+  'utf8',
+)
+process.stdout.write(`wrote ${doc.cases.length} cases to test/fixtures/fold.json\n`)
