@@ -55,6 +55,8 @@ declare
   v_available   boolean;
 
   v_product_id  uuid;
+  v_by_gtin     uuid;
+  v_by_listing  uuid;
   v_listing_id  uuid;
   v_key         text;
   v_before      public.catalog_listings%rowtype;
@@ -120,10 +122,12 @@ begin
       -- ── resolve the product ────────────────────────────────────────────────
       -- Priority order, and nothing below it. See docs/adding-a-retailer.md.
       v_product_id := null;
+      v_by_gtin    := null;
+      v_by_listing := null;
 
       -- 1. GTIN. The only merge anybody should fully trust.
       if v_gtin is not null then
-        select i.product_id into v_product_id
+        select i.product_id into v_by_gtin
           from public.catalog_identifiers i
          where i.identifier_type = 'gtin' and i.identifier_value = v_gtin;
       end if;
@@ -131,10 +135,29 @@ begin
       -- 2. This retailer already told us which product this listing is. A fact we
       --    recorded, not a guess -- and note it says nothing about OTHER
       --    retailers: an external_id identifies a listing, never a product.
-      if v_product_id is null then
-        select l.product_id into v_product_id
-          from public.catalog_listings l
-         where l.retailer_id = v_retailer_id and l.external_id = v_external_id;
+      select l.product_id into v_by_listing
+        from public.catalog_listings l
+       where l.retailer_id = v_retailer_id and l.external_id = v_external_id;
+
+      -- WHEN THE TWO DISAGREE, BELIEVE NEITHER AND SAY SO.
+      --
+      -- A listing we have known as product X that now reports product Y's
+      -- barcode is a contradiction, and the likeliest cause is a wrong EAN on a
+      -- product page rather than a genuine re-identification. Following the
+      -- barcode would silently move somebody's listing onto another product --
+      -- the milk would start carrying the water's price -- and it would happen
+      -- again on every run, invisibly.
+      --
+      -- So the listing keeps the product it had, the barcode keeps the product
+      -- it had, the row is counted as a conflict, and a human decides. The
+      -- catalog is allowed to be incomplete; it is not allowed to be confidently
+      -- wrong.
+      if v_by_gtin is not null and v_by_listing is not null and v_by_gtin <> v_by_listing then
+        v_conflicts := v_conflicts + 1;
+        v_product_id := v_by_listing;
+        v_gtin := null;  -- do not attach it to either product
+      else
+        v_product_id := coalesce(v_by_gtin, v_by_listing);
       end if;
 
       -- 3. The merge key: brand, name without its size, canonical size.
