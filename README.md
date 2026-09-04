@@ -45,7 +45,7 @@ test/             124 assertions, all against fixtures captured from live sites
 | Shop | How | Products | GTIN | Price |
 |---|---|---|---|---|
 | **Auchan** | public VTEX catalog API | ~60,000 | yes, most | yes |
-| **Carrefour** | sitemap → page JSON-LD | ~38,500 | **never** | yes |
+| **Carrefour** | sitemap → page JSON-LD | ~85,000 | **never** | yes |
 | **Lidl** | sitemap → page JSON-LD | 511 | about a third | in stock only |
 | Kaufland | — | — | — | — |
 | Mega Image | — | — | — | — |
@@ -133,7 +133,7 @@ Flags: `--dry-run` (no credentials needed, no writes), `--limit N`,
 `--since 2026-09-01`, `--ndjson` (stream products to stdout), `--quiet`.
 
 Capture once and iterate offline, which is how you avoid re-crawling Carrefour
-for ten hours to test a parser change:
+for a day to test a parser change:
 
 ```bash
 npm run scrape -- carrefour --ndjson --dry-run > carrefour.ndjson

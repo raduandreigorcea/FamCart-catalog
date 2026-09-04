@@ -30,10 +30,10 @@ export interface PageCrawlOptions {
   /**
    * Which of the sitemap's URLs are product pages.
    *
-   * Carrefour's sitemap index holds a category sitemap next to the product one,
-   * and 600 department pages carry no Product block -- fetching them to discover
-   * that costs ten minutes and 180 MB per run, and buries the real
-   * "this page had no product" signal under noise that is not a problem.
+   * Carrefour's index mixes ~3,400 department pages in with 85,121 product ones,
+   * and a department page carries no Product block -- fetching them to discover
+   * that costs an hour and a gigabyte per run, and buries the real "this page had
+   * no product" signal, which is a symptom worth seeing, under noise that is not.
    */
   urlFilter?: (url: string) => boolean
   /**
