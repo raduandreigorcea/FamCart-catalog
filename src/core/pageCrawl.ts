@@ -181,7 +181,13 @@ export async function* crawlProductPages(
     }
 
     yield product
-    if (ctx.limit && ++emitted >= ctx.limit) break
+    // Counted unconditionally. It used to be `ctx.limit && ++emitted`, which
+    // short-circuits when there is no limit -- so every full run logged
+    // `emitted: 0` beside thousands of fetched pages and read like a crawl that
+    // was finding nothing. The products were arriving; only the log was lying,
+    // which is the worse of the two but still worth not doing.
+    emitted++
+    if (ctx.limit && emitted >= ctx.limit) break
 
     if (counters.fetched % 500 === 0) {
       ctx.log.info(`${retailer}: crawling`, { ...counters, emitted })
