@@ -115,9 +115,16 @@ async function scrapeOne(
     // silently becomes the baseline that the next truncated run looks healthy
     // against.
     //
-    // `--limit` is not incomplete in this sense. It is a deliberate partial run
-    // and the scrapers do not report it, but it must not sweep either, which is
-    // why a limited run is only ever pointed at a local database.
+    // `--limit` is a deliberate partial run, and it must not sweep either -- for
+    // exactly the same reason. A comment used to say so and nothing enforced it,
+    // which made "only point a limited run at a local database" a rule somebody
+    // had to remember at 2am. A limited run against the real catalog would have
+    // completed, cleared the floor easily, and marked everything it did not
+    // reach as no longer sold.
+    if (args.limit !== undefined && incomplete === null) {
+      incomplete = `--limit ${args.limit}: a deliberate partial run`
+    }
+
     if (incomplete !== null) {
       throw new Error(`crawl ended early: ${incomplete}`)
     }
