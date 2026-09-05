@@ -9,7 +9,7 @@ sitemaps to a general crawler.
 
 ---
 
-## Auchan — implemented
+## Auchan -- implemented
 
 **auchan.ro**, VTEX.
 
@@ -39,7 +39,7 @@ straight through and has to be cut into slices.
 `/products/search` kept answering normally throughout, repeatedly, across the
 whole session.
 
-The obvious design — fetch the category tree, walk it, page each category — is
+The obvious design -- fetch the category tree, walk it, page each category -- is
 therefore built on the one endpoint that will not answer when you need it.
 
 ### What it does instead
@@ -62,12 +62,12 @@ for the endpoint it does.
 - `productReference` is sometimes a real EAN and sometimes a 13-digit internal
   code for loose produce. Both look like barcodes; only one is. Every candidate
   goes through a check-digit test, and the internal ones are correctly dropped.
-- `brand` is `"Non-brand"` for produce and loose goods. Stored as null — otherwise
+- `brand` is `"Non-brand"` for produce and loose goods. Stored as null -- otherwise
   every apple in the dropdown gets a made-up maker.
 
 ---
 
-## Carrefour — implemented
+## Carrefour -- implemented
 
 **carrefour.ro**, Magento.
 
@@ -102,13 +102,13 @@ Each product page carries exactly one `application/ld+json` block of
 
 Magento exposes `/graphql`. A POST to it from anything that is not the shop's own
 front end returns **403 behind a Cloudflare challenge**. That is Carrefour saying
-no to that door, so the scraper uses the front one — the product pages, which are
+no to that door, so the scraper uses the front one -- the product pages, which are
 public, indexed and allowed by robots.txt. No attempt is made to get past the
 challenge.
 
 ### Limitations
 
-- **No GTIN. Not a wrong one, not an empty one — the field is absent from every
+- **No GTIN. Not a wrong one, not an empty one -- the field is absent from every
   Product block on the site.** This is the single biggest constraint on the whole
   catalog: a Carrefour listing can only ever match another shop's by the merge
   key, and where two shops word a product differently they stay two products. The
@@ -116,7 +116,7 @@ challenge.
   merging starts by itself.
 - **No category on the product page.** The JSON-LD has none and the URL is a
   slug. The scraper recognises a few department words and returns null otherwise,
-  which is honest — a guessed shelf is invisible, a null one is findable in the
+  which is honest -- a guessed shelf is invisible, a null one is findable in the
   admin dashboard.
 - **Cost, and it is the real constraint here.** 85,121 pages at ~300 KB and one
   request per second is about **24 hours and ~25 GB** for a first run. That is a
@@ -124,18 +124,18 @@ challenge.
   incremental on `lastmod`, which is why that field matters more for this shop
   than for the other two.
 - A delisted product returns **404 with no Product block**. That is recorded as
-  "delisted" and, importantly, does *not* mark anything unavailable — absence is
+  "delisted" and, importantly, does *not* mark anything unavailable -- absence is
   the sweep's business, once, after a complete run.
 
 ---
 
-## Lidl — implemented
+## Lidl -- implemented
 
 **lidl.ro**, Nuxt.
 
 `/static/sitemap.xml` points at `/p/export/RO/ro/product_sitemap.xml.gz`, which
 holds **511** product URLs shaped `/p/{slug}/p{id}`. No `lastmod`, so every run
-crawls the lot — which is cheap at this size.
+crawls the lot -- which is cheap at this size.
 
 Lidl RO has no general webshop; these are assortment pages for what is on the
 shelves. It is nonetheless the **best data of the three**: it is the only retailer
@@ -149,7 +149,7 @@ here that publishes a `gtin13`, on roughly a third of its products.
   the whole Lidl catalog gone.
 - `offers` is an **array**, and only the in-stock entry carries a price. A product
   can legitimately arrive with no price. A shopping list still wants it.
-- `sku` is variant-level and longer than the URL id — the page for `p11000189`
+- `sku` is variant-level and longer than the URL id -- the page for `p11000189`
   reports `"11000189121"`. The URL id is used instead, because an id that changes
   when a variant is reorganised means a new listing plus a swept old one on every
   run.
@@ -159,14 +159,14 @@ here that publishes a `gtin13`, on roughly a third of its products.
 - **Product names rarely carry a size** ("Ciocolată", "Piept de pui feliat"), so
   most Lidl rows have a null quantity and can only merge with another shop's
   through a GTIN. Verified on a live run: twelve products, zero parsed quantities.
-- The sitemap is a **gzip file, not a gzip-encoded response** — no
+- The sitemap is a **gzip file, not a gzip-encoded response** -- no
   `content-encoding` header, so `fetch` does not decompress it and reading it as
   text destroys the magic number. The crawler gunzips from the raw bytes. Getting
   this wrong made a live run read 511 URLs as zero.
 
 ---
 
-## Kaufland — not implementable
+## Kaufland -- not implementable
 
 **kaufland.ro** is a leaflet, recipe and information site. There is no online
 assortment to read.
@@ -183,7 +183,7 @@ What was probed:
   requested directly.
 
 This is not a scraper that is hard to write; it is a scraper with nothing to
-read. There is no bypass to consider, because there is no protected data — the
+read. There is no bypass to consider, because there is no protected data -- the
 data does not exist on the site.
 
 It stays in `src/core/registry.ts` with `implemented: false` so
@@ -192,7 +192,7 @@ It stays in `src/core/registry.ts` with `implemented: false` so
 
 ---
 
-## Mega Image — deferred, not blocked
+## Mega Image -- deferred, not blocked
 
 **mega-image.ro**, Next.js with an Apollo cache. Readable, and skipped on purpose.
 
@@ -213,7 +213,7 @@ It stays in `src/core/registry.ts` with `implemented: false` so
   with JSON for a product path, so every product costs a full page render's worth
   of bytes.
 
-None of that is a prohibition — it is a cost/benefit judgement, and the owner's
+None of that is a prohibition -- it is a cost/benefit judgement, and the owner's
 call was to skip it in this pass. If it is picked up later, the shape is already
 known: sitemap → page → `__NEXT_DATA__` → `pageProps.pageData`, and the listing
 lands with `price: null`.
@@ -229,4 +229,4 @@ deliberately, its shape is specified by somebody other than the shop, and it
 survives redesigns that would break a scraper reading rendered markup.
 
 None of the three implemented scrapers needs a browser. That was not a constraint
-imposed on the design — it is what the analysis found.
+imposed on the design -- it is what the analysis found.
