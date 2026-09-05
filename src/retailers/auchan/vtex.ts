@@ -10,7 +10,7 @@
 // test before it is believed).
 
 import type { RetailerProduct, Unit, Category } from '../../core/types.ts'
-import { parseQuantity, validGtin, httpsUrl } from '../../core/normalize.ts'
+import { parseQuantity, validGtin, httpsUrl, usableBrand } from '../../core/normalize.ts'
 
 export interface VtexCommercialOffer {
   Price?: number
@@ -150,7 +150,7 @@ export function toRetailerProduct(product: VtexProduct, retailer = 'auchan'): Re
     retailer,
     externalId,
     name,
-    brand: normalizeBrand(product.brand),
+    brand: usableBrand(product.brand),
     gtin,
     price,
     currency: price === null ? null : 'RON',
@@ -165,16 +165,6 @@ export function toRetailerProduct(product: VtexProduct, retailer = 'auchan'): Re
   }
 }
 
-/**
- * "Non-brand" is VTEX's placeholder for produce and loose goods, not a brand.
- * Storing it would put a made-up maker under every apple in the dropdown.
- */
-function normalizeBrand(brand: string | undefined): string | null {
-  const value = String(brand ?? '').trim()
-  if (!value) return null
-  if (/^(non[- ]?brand|generic|fara marca|n\/a)$/i.test(value)) return null
-  return value.length <= 80 ? value : null
-}
 
 /** The ancestor chain a product carries, longest first: /1000000/1020000/1021000/ */
 export function categoryPathsOf(product: VtexProduct): string[] {

@@ -31,7 +31,7 @@ import { fetchRobots, isAllowed } from '../../core/robots.ts'
 import { crawlProductPages } from '../../core/pageCrawl.ts'
 import { isAvailable } from '../../core/jsonld.ts'
 import type { JsonLdProduct } from '../../core/jsonld.ts'
-import { parseQuantity, validGtin, httpsUrl } from '../../core/normalize.ts'
+import { parseQuantity, validGtin, httpsUrl, usableBrand } from '../../core/normalize.ts'
 
 const ORIGIN = 'https://carrefour.ro'
 const SITEMAP = `${ORIGIN}/pub/sitemap/sitemap.xml`
@@ -92,7 +92,7 @@ export function buildProduct(product: JsonLdProduct, url: string): RetailerProdu
     retailer: 'carrefour',
     externalId,
     name,
-    brand: product.brand && product.brand.length <= 80 ? product.brand : null,
+    brand: usableBrand(product.brand),
     // Kept even though Carrefour has never once populated it: the day they start
     // is the day their listings begin merging with Auchan's, and nobody should
     // have to remember to turn that on.

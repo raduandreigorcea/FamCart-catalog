@@ -5,7 +5,7 @@
 // "6 x 0,5 L" wrong puts a crate and a bottle in the same row.
 
 import { describe, it, expect } from 'vitest'
-import { parseQuantity, stripQuantity, validGtin, httpsUrl } from '../src/core/normalize.ts'
+import { parseQuantity, stripQuantity, validGtin, httpsUrl, usableBrand } from '../src/core/normalize.ts'
 import { parseUrlset, parseSitemapIndex } from '../src/core/sitemap.ts'
 import { extractJsonLd, findProduct, readProduct, isAvailable } from '../src/core/jsonld.ts'
 import { parseRobots, isAllowed } from '../src/core/robots.ts'
@@ -77,6 +77,36 @@ describe('validGtin', () => {
     expect(validGtin('123')).toBeNull()
     expect(validGtin(null)).toBeNull()
     expect(validGtin('')).toBeNull()
+  })
+})
+
+describe('usableBrand', () => {
+  it('drops the placeholders shops write instead of a brand', () => {
+    // Both found in live data: VTEX puts "Non-brand" under loose produce, and
+    // Lidl ships "Dummymarke" -- German for dummy brand -- across its flower
+    // range. Stored, either one invents a maker for a product that has none.
+    expect(usableBrand('Non-brand')).toBeNull()
+    expect(usableBrand('Dummymarke')).toBeNull()
+    expect(usableBrand('n/a')).toBeNull()
+    expect(usableBrand('  ')).toBeNull()
+    expect(usableBrand(null)).toBeNull()
+  })
+
+  it('is case and accent insensitive, because shops are not consistent', () => {
+    expect(usableBrand('NON-BRAND')).toBeNull()
+    expect(usableBrand('Fără marcă')).toBeNull()
+  })
+
+  it('keeps a short brand, which is not the same as a placeholder', () => {
+    // W5 and Ja! are real Lidl own-brands. Guessing from length would delete
+    // them, which is why this matches known values instead.
+    expect(usableBrand('W5')).toBe('W5')
+    expect(usableBrand('Ja!')).toBe('Ja!')
+    expect(usableBrand('Zuzu')).toBe('Zuzu')
+  })
+
+  it('refuses one too long for the column', () => {
+    expect(usableBrand('x'.repeat(81))).toBeNull()
   })
 })
 

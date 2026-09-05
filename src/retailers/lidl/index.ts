@@ -26,7 +26,7 @@ import { fetchRobots, isAllowed } from '../../core/robots.ts'
 import { crawlProductPages } from '../../core/pageCrawl.ts'
 import { isAvailable } from '../../core/jsonld.ts'
 import type { JsonLdProduct } from '../../core/jsonld.ts'
-import { parseQuantity, validGtin, httpsUrl } from '../../core/normalize.ts'
+import { parseQuantity, validGtin, httpsUrl, usableBrand } from '../../core/normalize.ts'
 
 const ORIGIN = 'https://www.lidl.ro'
 const SITEMAP = `${ORIGIN}/p/export/RO/ro/product_sitemap.xml.gz`
@@ -78,7 +78,7 @@ export function buildProduct(product: JsonLdProduct, url: string): RetailerProdu
     retailer: 'lidl',
     externalId,
     name,
-    brand: product.brand && product.brand.length <= 80 ? product.brand : null,
+    brand: usableBrand(product.brand),
     gtin: validGtin(product.gtin),
     price,
     currency: price === null ? null : (product.currency ?? 'RON'),

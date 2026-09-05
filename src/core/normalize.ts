@@ -161,6 +161,32 @@ export function validGtin(code: string | null | undefined): string | null {
   return check === Number(digits[digits.length - 1]) ? digits : null
 }
 
+/**
+ * A brand, or null when the shop wrote a placeholder instead of one.
+ *
+ * Every retail platform has a filler value for "no brand", and storing it puts
+ * an invented maker under the product forever. The ones here were all found in
+ * live data: VTEX writes "Non-brand" under loose produce, and Lidl ships
+ * "Dummymarke" -- German for dummy brand -- on its flower and plant range.
+ *
+ * A brand that is merely SHORT is not a placeholder. "W5", "Ja!" and "M" are
+ * real own-brands, so this matches whole known values rather than guessing from
+ * length.
+ */
+const PLACEHOLDER_BRANDS = new Set([
+  'non-brand', 'nonbrand', 'non brand', 'no brand', 'nobrand',
+  'dummymarke', 'dummy', 'dummy brand', 'marke',
+  'generic', 'generico', 'fara marca', 'fără marcă',
+  'n/a', 'na', 'none', 'null', '-', '--',
+])
+
+export function usableBrand(brand: string | null | undefined): string | null {
+  const value = String(brand ?? '').trim()
+  if (!value || value.length > 80) return null
+  if (PLACEHOLDER_BRANDS.has(fold(value))) return null
+  return value
+}
+
 /** https only, and short enough for the column. */
 export function httpsUrl(url: string | null | undefined, maxLength = 1000): string | null {
   const value = String(url ?? '').trim()
