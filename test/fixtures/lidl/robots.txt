@@ -1,0 +1,15 @@
+User-agent: *
+Disallow: /q/search?id=*
+Disallow: /cc.js*
+Disallow: /1*
+Disallow: /2*
+Disallow: /3*
+Disallow: /4*
+Disallow: /5*
+Disallow: /6*
+Disallow: /7*
+Disallow: /8*
+Disallow: /9*
+Disallow: /cdn/assets/cwv/
+
+Sitemap: https://www.lidl.ro/static/sitemap.xml
