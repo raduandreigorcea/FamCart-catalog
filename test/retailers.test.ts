@@ -84,6 +84,56 @@ describe('auchan / VTEX', () => {
     expect(product.gtin).toBe('5942219115845')
   })
 
+  it('says it stopped short when the shop stops answering', async () => {
+    // THE ONE THAT WOULD HAVE CAUGHT THE FIRST REAL RUN. Auchan opened the
+    // circuit at 9,523 products of roughly 60,000, the generator ended cleanly,
+    // and the CLI closed the run as `completed` -- a sixth of a shop, recorded as
+    // a finished crawl and eligible to sweep. A generator that stops early looks
+    // exactly like one that finished, so it has to SAY so.
+    const reasons: string[] = []
+    const fetchImpl = fixtureFetch([
+      { match: '/robots.txt', file: 'auchan/robots.txt' },
+      { match: '/category/tree/', status: 429, body: 'Too Many Requests' },
+      { match: '/products/search', status: 500, body: 'boom' },
+    ])
+    const log = testLogger()
+    await collect(
+      new AuchanScraper().discoverProducts({
+        log,
+        fetchImpl,
+        minIntervalMs: 0,
+        reportIncomplete: (reason) => void reasons.push(reason),
+      }),
+      50,
+    )
+    expect(reasons.length).toBeGreaterThan(0)
+  })
+
+  it('says nothing about being incomplete when the crawl actually finishes', async () => {
+    const reasons: string[] = []
+    const fetchImpl = fixtureFetch([
+      { match: '/robots.txt', file: 'auchan/robots.txt' },
+      { match: '/category/tree/', status: 429, body: 'Too Many Requests' },
+      {
+        match: '/products/search',
+        file: 'auchan/products-search.json',
+        headers: { resources: '0-9/10' },
+      },
+    ])
+    await collect(
+      new AuchanScraper().discoverProducts({
+        log: testLogger(),
+        fetchImpl,
+        minIntervalMs: 0,
+        reportIncomplete: (reason) => void reasons.push(reason),
+      }),
+      50,
+    )
+    // A 429 from the category tree is expected and survivable, and must not be
+    // mistaken for a truncated crawl.
+    expect(reasons).toEqual([])
+  })
+
   it('crawls with no category tree at all, learning categories from the products', async () => {
     // The tree endpoint 429s in real life. This is the path that has to work.
     const fetchImpl = fixtureFetch([

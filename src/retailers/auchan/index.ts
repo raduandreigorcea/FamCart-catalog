@@ -51,13 +51,27 @@ export class AuchanScraper implements RetailerScraper {
   readonly implemented = true
 
   async *discoverProducts(ctx: ScrapeContext): AsyncGenerator<RetailerProduct> {
-    // Auchan's API is JSON and answers fast, so it can be paced a little harder
-    // than a page crawl -- but not much: the metadata endpoints are proof that
-    // there is a budget and that it is not generous.
+    // ONE REQUEST A SECOND, measured rather than guessed.
+    //
+    // This was 400ms, on the reasoning that a JSON API answers faster than a page
+    // crawl. The first full run disproved it: Auchan served about 1.65 requests a
+    // second for roughly 400 seconds and then began refusing, the breaker opened,
+    // and the crawl ended at 9,523 products of roughly 60,000 -- sixteen per cent
+    // of the shop, reported as a finished run.
+    //
+    // The budget is real and it is not generous, exactly as the metadata
+    // endpoints already showed. A slower crawl that finishes is worth more than a
+    // fast one that stops, and there is nothing waiting on it.
+    //
+    // The cooldown is five minutes rather than one for the same reason: when the
+    // shop does start refusing, the useful response is to wait it out, not to
+    // retry into it four more times and give up.
     const http = new HttpClient({
-      minIntervalMs: ctx.minIntervalMs ?? 400,
+      minIntervalMs: ctx.minIntervalMs ?? 1000,
       timeoutMs: 30_000,
       retries: 3,
+      tripAfter: 6,
+      cooldownMs: 300_000,
       fetchImpl: ctx.fetchImpl,
     })
 
@@ -180,14 +194,19 @@ export class AuchanScraper implements RetailerScraper {
           // import what it has and close as `partial`, which is exactly the case
           // the sanity floor exists for.
           ctx.log.error('auchan circuit open; ending the crawl early', { category: categoryPath })
+          ctx.reportIncomplete?.(
+            `circuit opened while paging ${categoryPath ?? '(all)'}; the shop stopped answering`,
+          )
           return
         }
         ctx.log.warn('auchan page failed; skipping it', { url, error: String(error) })
+        ctx.reportIncomplete?.(`a page of ${categoryPath ?? '(all)'} could not be read`)
         return
       }
 
       if (!response.ok) {
         ctx.log.warn('auchan page returned an error', { url, status: response.status })
+        ctx.reportIncomplete?.(`HTTP ${response.status} paging ${categoryPath ?? '(all)'}`)
         return
       }
 

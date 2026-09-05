@@ -121,6 +121,7 @@ export async function* crawlProductPages(
     // zero and catalog_run_complete will refuse to sweep, which is the correct
     // outcome for "the sitemap moved" and the wrong one for "the shop closed".
     ctx.log.error(`${retailer}: sitemap yielded no product URLs`)
+    ctx.reportIncomplete?.('the sitemap yielded no product URLs')
     return
   }
 
@@ -145,6 +146,9 @@ export async function* crawlProductPages(
         // imported; the run closes short of its previous count and the sanity
         // floor in catalog_run_complete refuses to sweep on the strength of it.
         ctx.log.error(`${retailer}: circuit open, ending the crawl early`, counters)
+        ctx.reportIncomplete?.(
+          `circuit opened after ${counters.fetched} of ${counters.urls} pages`,
+        )
         return
       }
       counters.failed++
