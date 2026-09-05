@@ -74,6 +74,12 @@ async function scrapeOne(
   process.once('SIGTERM', onSignal)
 
   const started = Date.now()
+  // Set by the scraper when it stops before it has seen everything. A generator
+  // that ends early is indistinguishable from one that finished -- both just stop
+  // yielding -- so this is the only thing standing between "the shop stopped
+  // answering after a sixth of its catalog" and a run marked `completed`.
+  let incomplete: string | null = null
+
   try {
     await run.open()
 
@@ -83,6 +89,9 @@ async function scrapeOne(
       since: args.since,
       log,
       signal: controller.signal,
+      reportIncomplete: (reason) => {
+        incomplete ??= reason
+      },
     })) {
       if (args.ndjson) process.stdout.write(JSON.stringify(product) + '\n')
       await run.add(product)
@@ -96,6 +105,21 @@ async function scrapeOne(
       // The generator stops cleanly on abort, so without this check an
       // interrupted crawl would look like a finished one.
       throw new Error('interrupted before the crawl finished')
+    }
+
+    // A crawl that stopped short did not finish, whatever it managed to import.
+    // Closing it as failed keeps everything it DID see -- imports are never
+    // rolled back -- while making certain it can never sweep, and keeping it out
+    // of the count the next run's sanity floor is measured against. That second
+    // part is the one that bites: a truncated run recorded as `completed`
+    // silently becomes the baseline that the next truncated run looks healthy
+    // against.
+    //
+    // `--limit` is not incomplete in this sense. It is a deliberate partial run
+    // and the scrapers do not report it, but it must not sweep either, which is
+    // why a limited run is only ever pointed at a local database.
+    if (incomplete !== null) {
+      throw new Error(`crawl ended early: ${incomplete}`)
     }
 
     const verdict = await run.complete()

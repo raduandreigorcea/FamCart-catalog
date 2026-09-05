@@ -77,6 +77,20 @@ export interface ScrapeContext {
   since?: Date
   /** Somewhere to say what is happening. */
   log: Logger
+  /**
+   * Say that the crawl ended before it had seen everything.
+   *
+   * THIS IS NOT LOGGING. A generator that stops early looks exactly like one
+   * that finished, because both simply stop yielding -- so without this the CLI
+   * closes the run as `completed` and the run becomes eligible to sweep on the
+   * strength of a fraction of a shop.
+   *
+   * It is the gap that let the first full Auchan run report `completed` after
+   * the circuit opened at 9,523 products of roughly 60,000. Nothing was swept
+   * only because a first run has no previous run to be measured against; the
+   * second would have been measured against that 9,523 and looked healthy.
+   */
+  reportIncomplete?: (reason: string) => void
   /** Injected so tests can drive a scraper entirely from test/fixtures/. */
   fetchImpl?: typeof fetch
   /**
