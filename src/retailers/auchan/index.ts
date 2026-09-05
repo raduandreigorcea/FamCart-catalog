@@ -24,6 +24,19 @@
 // The tree is still fetched first when it can be, because starting from the real
 // category list reaches the long tail faster. When it 429s, the run says so and
 // carries on.
+//
+// A PAGE THAT ERRORS IS NOT A TRUNCATED CRAWL, and conflating the two cost a
+// good run: twelve pages out of thousands returned 500, the first of them marked
+// a pass that read 59,839 of roughly 60,000 products as `failed`, and a failed
+// run can never sweep -- so availability would have stopped updating for Auchan
+// entirely while every run looked broken.
+//
+// Skipping a page ends that CATEGORY's paging and the frontier continues, so the
+// run is still a full pass with a hole in it. What the hole costs is products,
+// and products are exactly what catalog_run_complete's sanity floor measures. A
+// crawl that lost enough pages to matter comes in short and is caught there,
+// which is the check built for it. Only the circuit opening ends the crawl, and
+// only that reports itself as incomplete.
 
 import type { RetailerProduct, RetailerScraper, ScrapeContext, Market } from '../../core/types.ts'
 import { HttpClient, CircuitOpenError } from '../../core/http.ts'
@@ -199,14 +212,15 @@ export class AuchanScraper implements RetailerScraper {
           )
           return
         }
+        // Skipping ONE page is not ending the crawl. This returns from the
+        // category's generator and the frontier carries on with the rest, so the
+        // run is still a full pass with a hole in it.
         ctx.log.warn('auchan page failed; skipping it', { url, error: String(error) })
-        ctx.reportIncomplete?.(`a page of ${categoryPath ?? '(all)'} could not be read`)
         return
       }
 
       if (!response.ok) {
         ctx.log.warn('auchan page returned an error', { url, status: response.status })
-        ctx.reportIncomplete?.(`HTTP ${response.status} paging ${categoryPath ?? '(all)'}`)
         return
       }
 
