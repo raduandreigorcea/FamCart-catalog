@@ -3,7 +3,7 @@
 A catalog of what real shops actually sell.
 
 FamCart is a shopping list. When somebody types `lapte`, the useful answer is the
-milk they can pick up this afternoon at a shop near them — not a milk-shaped
+milk they can pick up this afternoon at a shop near them -- not a milk-shaped
 concept, and not a product that exists in a database somewhere in the world.
 
 So this catalog is built from retailer data and nothing else. A row is here
@@ -18,7 +18,7 @@ external food databases live, on the keystroke path, whenever somebody typed
 something it did not know.
 
 It answered a question nobody was asking. Searching `beer` returned strawberries
-and blueberries, because the German for berries contains the substring — and
+and blueberries, because the German for berries contains the substring -- and
 there was no beer, because nobody had contributed any. The catalog knew what
 products *exist*; it did not know what you can *buy*.
 
@@ -47,8 +47,8 @@ test/             124 assertions, all against fixtures captured from live sites
 | **Auchan** | public VTEX catalog API | ~60,000 | yes, most | yes |
 | **Carrefour** | sitemap → page JSON-LD | ~85,000 | **never** | yes |
 | **Lidl** | sitemap → page JSON-LD | 511 | about a third | in stock only |
-| Kaufland | — | — | — | — |
-| Mega Image | — | — | — | — |
+| Kaufland | -- | -- | -- | -- |
+| Mega Image | -- | -- | -- | -- |
 
 Kaufland has no online assortment to read, and Mega Image is readable but
 deliberately deferred. `docs/retailers.md` records exactly what was probed for
@@ -66,7 +66,7 @@ one shop dropping a line would take it off every shelf at once.
 gone.** A scraper that dies halfway has seen a fraction of a shop. If "I did not
 see it" meant "it is gone", every timeout would wipe a retailer. So imports only
 ever say *I saw this, now*; the sweep that says *and therefore not these* happens
-once, at the end, and only if the run earned it — it refuses on zero products,
+once, at the end, and only if the run earned it -- it refuses on zero products,
 and it refuses when a run found less than half of what the last good one found.
 
 This is not hypothetical. Auchan returned 429 on two endpoints while this was
@@ -78,12 +78,12 @@ were caught, both swept nothing, and the catalog was undamaged in both cases.
 In order, and nothing below it:
 
 1. **GTIN.** The only merge to fully trust.
-2. **A listing we already recorded** — `(retailer, their id)`. A fact, not a guess.
+2. **A listing we already recorded** -- `(retailer, their id)`. A fact, not a guess.
    Note what it is *not*: their id identifies a listing, never a product across
    shops.
 3. **The merge key**: folded brand, folded name with the size removed, and the
    size canonicalised. `Coca-Cola Zero 1,5 L` and `Coca Cola zero 1.5l` are one
-   product. `Coca Cola Zero 500ml` is a different one — the size is *in* the key,
+   product. `Coca Cola Zero 500ml` is a different one -- the size is *in* the key,
    not a tie-break.
 4. **Nothing else.** No trigram merging, no similarity threshold, no "close
    enough". Two rows for one product is cosmetic; one row for two products is
@@ -102,7 +102,7 @@ so nobody "fixes" it with a fuzzy merge later.
 ## What the app calls
 
 Three RPCs, and **their names and argument names are a cross-repository
-contract** — PostgREST resolves by argument name, so a rename breaks the app
+contract** -- PostgREST resolves by argument name, so a rename breaks the app
 silently:
 
 ```
@@ -112,7 +112,7 @@ bump_product_popularity(p_name, p_maker)
 ```
 
 `p_markets` **filters**: a phone in Germany gets nothing from here, because it
-cannot buy any of this. `p_langs` is accepted and ignored — every product here is
+cannot buy any of this. `p_langs` is accepted and ignored -- every product here is
 Romanian. `p_fuzzy` is off by default, because an empty result now means "no shop
 we read lists this", which is true and useful.
 

@@ -1,7 +1,7 @@
 # Adding a retailer
 
 Adding a shop means adding a directory and a line. Nothing in the pipeline
-changes — validation, matching, the importer and the run accounting read only
+changes -- validation, matching, the importer and the run accounting read only
 `RetailerProduct`, and that is the property the whole abstraction exists to have.
 
 The work that actually matters happens before any of that, and it is the part
@@ -25,7 +25,7 @@ order and stop at the first that answers:
 | A feed | `.xml`, `.csv`, a partner export | none so far |
 
 **Fetch the raw bytes, not a rendered view.** Tools that convert a page to
-markdown strip `<script>` tags, which is exactly where the JSON-LD lives — two
+markdown strip `<script>` tags, which is exactly where the JSON-LD lives -- two
 shops here looked like they had no structured data at all until they were fetched
 with `curl` and grepped.
 
@@ -50,7 +50,7 @@ path it wants is disallowed. That is a real gate, not a gesture.
 **If a shop has said no, the answer is no.** Nothing in this repository rotates
 proxies, shuffles user agents, replays cookies, solves CAPTCHAs or authenticates.
 A retailer that cannot be read politely gets `implemented: false` and a note. See
-Kaufland — though note that Kaufland is not blocked, it simply has no product
+Kaufland -- though note that Kaufland is not blocked, it simply has no product
 data to read at all.
 
 ## 3. Capture fixtures first
@@ -65,8 +65,8 @@ Capture the *variety*, not one happy example. The ones that have earned their
 place here:
 
 - in stock, with a price
-- **out of stock** — Lidl's `offers` array has no price at all in this case
-- **delisted** — Carrefour 404s, and the parser must return nothing rather than throw
+- **out of stock** -- Lidl's `offers` array has no price at all in this case
+- **delisted** -- Carrefour 404s, and the parser must return nothing rather than throw
 - an own-brand product, whose brand string is unusual
 - a product with a barcode and one without
 - a slice of the sitemap (50 entries is plenty) and the `robots.txt`
@@ -115,7 +115,7 @@ Rules that are not negotiable:
   `--since`.
 - **`externalId` must be stable across runs.** If it changes, every run inserts a
   new listing and sweeps the old one, and the catalog churns forever. Prefer the
-  id in the URL over a variant-level sku — Lidl's differ.
+  id in the URL over a variant-level sku -- Lidl's differ.
 - **Return `null` rather than guessing.** A null category is findable in the admin
   dashboard; a wrong one is invisible.
 
@@ -197,5 +197,5 @@ does.
 ## 8. Document it
 
 Add a section to `docs/retailers.md`: the mechanism, the numbers you measured,
-and — most usefully — **the limitations**. Every scraper here has some. Writing
+and -- most usefully -- **the limitations**. Every scraper here has some. Writing
 them down is what stops somebody later reading a null category as a bug.
