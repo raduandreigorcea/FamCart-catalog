@@ -7,7 +7,7 @@
 -- Promise.allSettled returns [] and the dropdown just gets worse. The app's CI
 -- runs this suite for that reason.
 begin;
-select plan(31);
+select plan(37);
 
 delete from public.catalog_scrape_runs;
 delete from public.catalog_listings;
@@ -144,6 +144,42 @@ set local request.jwt.claims = '{"sub":"user-1"}';
 select public.bump_product_popularity('Apă minerală plată Dorna 2 litri', 'Dorna');
 select is((select add_count from public.catalog_products where canonical_name = 'Apa plata Dorna 2L'), 1,
   'a bump sent with the OTHER shop''s wording still finds the product');
+
+-- ─── the shopping list's lookup ──────────────────────────────────────────────
+-- A list row knows a name and a maker and nothing else, so showing which shop it
+-- came from is a lookup -- and one for the whole list at once, because twenty
+-- rows must not mean twenty round trips.
+select has_function('public', 'catalog_shops_for', array['text[]'],
+  'catalog_shops_for takes an array of names');
+
+select is(
+  (select retailers from public.catalog_shops_for(array['Apa plata Dorna 2L'])),
+  array['auchan', 'carrefour'],
+  'it names every shop carrying the product');
+
+select is(
+  (select count(*)::int from public.catalog_shops_for(array['Nothing Called This'])),
+  0, 'and says nothing about a name no shop uses');
+
+-- The row on somebody's list was very often picked out of a dropdown showing a
+-- SHOP's wording rather than ours, so the shop's own name has to resolve too.
+select is(
+  (select name from public.catalog_shops_for(array['Apă minerală plată Dorna 2 litri'])),
+  'Apa plata Dorna 2L',
+  'a retailer''s own wording resolves to the product it belongs to');
+
+select is(
+  (select count(*)::int from public.catalog_shops_for(array['Apa plata Dorna 2L', 'Lapte Zuzu 1L', 'Dorna'])),
+  3, 'a whole list is one call');
+
+-- A disabled shop stops being reported here for the same reason it stops
+-- answering search: its rows are still there, but nobody can buy from it.
+update public.catalog_retailers set enabled = false where slug = 'carrefour';
+select is(
+  (select retailers from public.catalog_shops_for(array['Apa plata Dorna 2L'])),
+  array['auchan'],
+  'a disabled shop is not reported as carrying anything');
+update public.catalog_retailers set enabled = true where slug = 'carrefour';
 
 select * from finish();
 rollback;
