@@ -84,29 +84,75 @@ describe('auchan / VTEX', () => {
     expect(product.gtin).toBe('5942219115845')
   })
 
-  it('says it stopped short when the shop stops answering', async () => {
+  it('says it stopped short when the shop stops answering altogether', async () => {
     // THE ONE THAT WOULD HAVE CAUGHT THE FIRST REAL RUN. Auchan opened the
     // circuit at 9,523 products of roughly 60,000, the generator ended cleanly,
     // and the CLI closed the run as `completed` -- a sixth of a shop, recorded as
     // a finished crawl and eligible to sweep. A generator that stops early looks
     // exactly like one that finished, so it has to SAY so.
-    const reasons: string[] = []
-    const fetchImpl = fixtureFetch([
-      { match: '/robots.txt', file: 'auchan/robots.txt' },
-      { match: '/category/tree/', status: 429, body: 'Too Many Requests' },
-      { match: '/products/search', status: 500, body: 'boom' },
+    //
+    // The tree answers here so the frontier has categories to work through:
+    // reaching the breaker takes more requests than a crawl that dies on its
+    // first page, and a crawl that dies on its first page is caught by finding
+    // nothing rather than by this.
+    const tree = JSON.stringify([
+      { id: 1000000, name: 'A', children: [{ id: 1010000, name: 'B' }] },
+      { id: 2000000, name: 'C', children: [{ id: 2010000, name: 'D' }] },
     ])
-    const log = testLogger()
+    const reasons: string[] = []
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/robots.txt')) return new Response(readFixture('auchan/robots.txt'))
+      if (url.includes('/category/tree/')) return new Response(tree)
+      throw new Error('connection reset')
+    }) as unknown as typeof fetch
+
     await collect(
       new AuchanScraper().discoverProducts({
-        log,
+        log: testLogger(),
         fetchImpl,
         minIntervalMs: 0,
         reportIncomplete: (reason) => void reasons.push(reason),
       }),
       50,
     )
-    expect(reasons.length).toBeGreaterThan(0)
+    expect(reasons.some((r) => r.includes('circuit'))).toBe(true)
+  })
+
+  it('does NOT call a crawl truncated because one page errored', async () => {
+    // This cost a good run. Twelve pages out of thousands returned 500, the
+    // first marked a pass that read 59,839 of roughly 60,000 products as failed,
+    // and a failed run can never sweep -- so availability would have stopped
+    // updating for Auchan entirely while every run looked broken.
+    //
+    // Skipping a page ends that CATEGORY's paging; the frontier carries on. What
+    // the hole costs is products, and products are what the sanity floor
+    // measures, so that is the check that belongs to it.
+    const reasons: string[] = []
+    let call = 0
+    const good = readFixture('auchan/products-search.json')
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/robots.txt')) return new Response(readFixture('auchan/robots.txt'))
+      if (url.includes('/category/tree/')) return new Response('nope', { status: 429 })
+      // One page in the middle fails; every other page answers.
+      call += 1
+      if (call === 2) return new Response('boom', { status: 500 })
+      return new Response(good, { status: 200, headers: { resources: '0-9/10' } })
+    }) as unknown as typeof fetch
+
+    const products = await collect(
+      new AuchanScraper().discoverProducts({
+        log: testLogger(),
+        fetchImpl,
+        minIntervalMs: 0,
+        limit: 5,
+        reportIncomplete: (reason) => void reasons.push(reason),
+      }),
+      50,
+    )
+    expect(products.length).toBeGreaterThan(0)
+    expect(reasons).toEqual([])
   })
 
   it('says nothing about being incomplete when the crawl actually finishes', async () => {
