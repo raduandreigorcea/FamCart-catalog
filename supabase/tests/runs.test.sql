@@ -9,7 +9,7 @@
 -- property of the test, not of the schema: in production the runs are minutes or
 -- days apart and catalog_run_open's default is right.
 begin;
-select plan(24);
+select plan(29);
 
 delete from public.catalog_scrape_runs;
 delete from public.catalog_listings;
@@ -133,6 +133,32 @@ select throws_ok(
   $$select public.catalog_run_open('kaufland')$$,
   'P0001', null,
   'opening a run for a retailer with no row is a loud error');
+
+-- ─── runs abandoned by a killed process ──────────────────────────────────────
+-- A scrape closes its own run, and both ways of doing that need the process to
+-- still be alive. SIGKILL is neither: when the OS reclaimed memory from an
+-- Auchan crawl 28,000 products in, the row sat `running` with nobody to close
+-- it. An abandoned row hides the last real result behind a crawl that looks like
+-- it is still going.
+select public.catalog_run_open('lidl') as run_id \gset ab_
+update public.catalog_scrape_runs set started_at = now() - interval '2 days' where id = :'ab_run_id';
+
+select is((select status from public.catalog_scrape_runs where id = :'ab_run_id'), 'running',
+  'an abandoned run starts out looking exactly like a live one');
+
+select is(public.catalog_run_reap(), 1, 'the reaper closes it');
+
+select is((select status from public.catalog_scrape_runs where id = :'ab_run_id'), 'failed',
+  'as FAILED, so it can never sweep');
+
+select alike((select error from public.catalog_scrape_runs where id = :'ab_run_id'), '%abandoned%'::text,
+  'saying so, rather than leaving somebody to guess why it has no counts'::text);
+
+-- Twelve hours, not one: a full Carrefour crawl is about a day, and a threshold
+-- shorter than the longest honest run would reap a crawl that is still working.
+select public.catalog_run_open('lidl') as run_id \gset fresh_
+select is(public.catalog_run_reap(), 0,
+  'and leaves a run that only just started alone');
 
 select * from finish();
 rollback;
