@@ -1,9 +1,9 @@
 -- ─── what the app calls ──────────────────────────────────────────────────────
 -- Three functions, and their NAMES AND ARGUMENT NAMES ARE A CROSS-REPOSITORY
 -- CONTRACT. PostgREST resolves an RPC by the argument names in the request body,
--- so renaming p_query, p_limit, p_markets, p_langs, p_codes, p_name or p_maker
--- breaks src/lib/productSuggestions.ts in the app repo with nothing here to warn
--- anybody. The app's CI runs this suite for exactly that reason.
+-- so renaming p_query, p_limit, p_markets, p_langs, p_retailers, p_codes,
+-- p_name or p_maker breaks src/lib/productSuggestions.ts in the app repo with
+-- nothing here to warn anybody. The app's CI runs this suite for exactly that reason.
 --
 -- The failure is also SILENT on the app's side: a 404 from PostgREST is caught,
 -- the catalog leg of Promise.allSettled returns [], and suggestions quietly fall
@@ -69,12 +69,26 @@ grant execute on function public.catalog_search_weights() to authenticated;
 -- "you may have typed it wrong" and answered `beer` with `Beef` and `toothpaste`
 -- with `Toothbrush`. No threshold fixes that -- sampoo/Sampon and champu/
 -- Champignon both score 0.714 -- so the fallback moved behind a flag instead.
+--
+-- p_retailers narrows to shops the caller named -- "I am in Lidl, what of this
+-- can I buy here". It goes LAST in the signature rather than beside p_markets,
+-- which reads worse and is the only safe place: every existing caller passes
+-- these positionally, so inserting an argument in the middle would silently
+-- turn somebody's p_langs into a shop list.
+--
+-- It decides WHICH PRODUCTS qualify and changes nothing about the row that
+-- comes back. A product carried by both Lidl and Auchan still reports both
+-- shops and still reports the cheaper of the two prices while the filter says
+-- Lidl. Narrowing the row as well would mean the same product showing a
+-- different price depending on a filter, and would hide the one fact worth
+-- having -- that it is cheaper across the road.
 create or replace function public.search_catalog(
-  p_query   text,
-  p_limit   integer default 100,
-  p_markets text[] default null,
-  p_langs   text[] default null,
-  p_fuzzy   boolean default false
+  p_query     text,
+  p_limit     integer default 100,
+  p_markets   text[] default null,
+  p_langs     text[] default null,
+  p_fuzzy     boolean default false,
+  p_retailers text[] default null
 )
 returns table (
   name            text,
@@ -142,7 +156,12 @@ begin
            min(l.price) filter (where l.available) as min_price,
            (array_agg(l.currency order by l.currency))[1] as currency,
            bool_or(l.available) as available,
-           count(distinct l.retailer_id) as retailer_count
+           count(distinct l.retailer_id) as retailer_count,
+           -- The shop filter, as a flag rather than another where clause. It
+           -- has to be computed over the WHOLE shelf: narrowing the rows first
+           -- would drop the other shops out of `retailers` and out of
+           -- `min_price`, and those stay whole on purpose (see the header).
+           bool_or(r.slug = any (coalesce(p_retailers, '{}'))) as has_wanted
       from candidates c
       join public.catalog_listings l on l.product_id = c.id
       join public.catalog_retailers r on r.id = l.retailer_id and r.enabled
@@ -177,6 +196,7 @@ begin
       s.retailer_count
       from candidates c
       join shelf s on s.product_id = c.id
+     where p_retailers is null or s.has_wanted
   )
   select
     sc.canonical_name,
@@ -202,12 +222,19 @@ begin
 end;
 $fn$;
 
-comment on function public.search_catalog(text, integer, text[], text[], boolean) is
-  'Autocomplete over the catalog. One row per product. p_markets filters hard; p_langs is accepted and ignored.';
+-- The five-argument version, dropped rather than left alongside. `create or
+-- replace` does not replace a function whose argument list changed -- it adds an
+-- OVERLOAD -- and PostgREST resolves an RPC by the argument names in the body,
+-- so two candidates matching the same body is an ambiguity it answers with a
+-- 300, not a choice. The app would see that as the catalog being down.
+drop function if exists public.search_catalog(text, integer, text[], text[], boolean);
 
-revoke all on function public.search_catalog(text, integer, text[], text[], boolean) from public, anon;
-grant execute on function public.search_catalog(text, integer, text[], text[], boolean) to authenticated;
-grant execute on function public.search_catalog(text, integer, text[], text[], boolean) to service_role;
+comment on function public.search_catalog(text, integer, text[], text[], boolean, text[]) is
+  'Autocomplete over the catalog. One row per product. p_markets and p_retailers filter hard; p_langs is accepted and ignored.';
+
+revoke all on function public.search_catalog(text, integer, text[], text[], boolean, text[]) from public, anon;
+grant execute on function public.search_catalog(text, integer, text[], text[], boolean, text[]) to authenticated;
+grant execute on function public.search_catalog(text, integer, text[], text[], boolean, text[]) to service_role;
 
 -- ─── barcode ─────────────────────────────────────────────────────────────────
 -- The one lookup that goes nowhere near ranking: a GTIN is an exact key and

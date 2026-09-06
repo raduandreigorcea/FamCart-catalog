@@ -173,7 +173,7 @@ select ok(not has_function_privilege('authenticated', 'public.catalog_merge_key(
   'the merge key is computable by nobody: knowing it means being able to collide with it');
 select ok(not has_function_privilege('authenticated', 'public.catalog_import_listings(jsonb, text, uuid)', 'execute'),
   'and the one writer is service_role only');
-select ok(has_function_privilege('authenticated', 'public.search_catalog(text, integer, text[], text[], boolean)', 'execute'),
+select ok(has_function_privilege('authenticated', 'public.search_catalog(text, integer, text[], text[], boolean, text[])', 'execute'),
   'while search is what a signed-in user is actually here for');
 
 select * from finish();

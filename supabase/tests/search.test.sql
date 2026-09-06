@@ -7,7 +7,7 @@
 -- Promise.allSettled returns [] and the dropdown just gets worse. The app's CI
 -- runs this suite for that reason.
 begin;
-select plan(37);
+select plan(46);
 
 delete from public.catalog_scrape_runs;
 delete from public.catalog_listings;
@@ -42,8 +42,8 @@ select lives_ok($$select * from public.search_catalog('apa', 100)$$,
 select lives_ok($$select * from public.search_catalog('apa', 100, array['RO'], array['ro'])$$,
   'and so does its four-argument one');
 select has_function('public', 'search_catalog',
-  array['text','integer','text[]','text[]','boolean'],
-  'search_catalog keeps its five-argument signature');
+  array['text','integer','text[]','text[]','boolean','text[]'],
+  'search_catalog keeps its signature, with the shop filter appended to the end of it');
 select has_function('public', 'lookup_barcode', array['text[]','text[]'],
   'lookup_barcode keeps p_codes and an optional p_langs');
 select has_function('public', 'bump_product_popularity', array['text','text'],
@@ -100,6 +100,53 @@ select is((select count(*)::int from public.search_catalog('lapte', 50, array['D
   'THE REVERSAL: a German phone gets nothing, because it cannot buy any of this');
 select ok((select count(*) from public.search_catalog('lapte', 50, null)) > 0,
   'and no market at all means no filter, not no results');
+
+-- ─── the shop filter ─────────────────────────────────────────────────────────
+-- "I am in Lidl, what of this can I buy here." The fixture has the same water
+-- at Auchan and Carrefour and everything else at Auchan alone, which is what
+-- makes the interesting case testable: a product on two shelves must survive
+-- being filtered to either of them.
+select ok((select count(*) from public.search_catalog('lapte', 50, null, null, false, array['auchan'])) > 0,
+  'a shop that carries it answers');
+select is((select count(*)::int from public.search_catalog('lapte', 50, null, null, false, array['carrefour'])), 0,
+  'a shop that does not carry it returns nothing, rather than returning it anyway');
+select ok((select count(*) from public.search_catalog('dorna 2', 50, null, null, false, array['carrefour'])) > 0,
+  'and a product on two shelves survives being filtered to either one');
+
+-- THE POINT OF THE WHOLE DESIGN. Filtering to Carrefour must not rewrite the
+-- row: the product is still carried by both shops and is still cheaper at
+-- Carrefour, and a filter that hid either fact would make the same product
+-- report a different price depending on which button was pressed.
+select is(
+  (select retailers from public.search_catalog('dorna 2', 50, null, null, false, array['carrefour'])),
+  array['auchan','carrefour'],
+  'the shops on the row stay whole -- the filter chooses products, not what a product is');
+select is(
+  (select min_price from public.search_catalog('dorna 2', 50, null, null, false, array['carrefour'])),
+  4.79,
+  'and so does the cheapest price, which is the one fact worth having');
+
+select is((select count(*)::int from public.search_catalog('lapte', 50, null, null, false, array['nosuchshop'])), 0,
+  'a shop nobody has heard of matches nothing rather than everything');
+select ok((select count(*) from public.search_catalog('lapte', 50, null, null, false, null)) > 0,
+  'and no shop at all means no filter, the same way p_markets reads null');
+
+-- Both filters at once, since the app sends the market on every keystroke and
+-- the shop only sometimes: an AND, never an OR.
+select is((select count(*)::int from public.search_catalog('lapte', 50, array['DE'], null, false, array['auchan'])), 0,
+  'market and shop narrow together -- the right shop in the wrong country is still nothing');
+
+-- ─── one function, not two ───────────────────────────────────────────────────
+-- The five-argument version had to be DROPPED, not left beside this one.
+-- `create or replace` with a changed argument list adds an overload, and
+-- PostgREST answers an ambiguous RPC with a 300 -- which the app reads as the
+-- catalog being unreachable, silently, on every keystroke.
+select is(
+  (select count(*)::int from pg_proc p
+     join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'search_catalog'),
+  1,
+  'exactly one search_catalog exists, so PostgREST can never have to choose');
 
 -- ─── a disabled retailer disappears from search, without losing its data ─────
 update public.catalog_retailers set enabled = false where slug = 'auchan';
