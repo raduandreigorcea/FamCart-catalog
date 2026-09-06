@@ -1,59 +1,39 @@
 {
-  // Separate from the root tsconfig because this code has a different runtime.
+  // The catalog is checked on its own, by plain tsc, with no bundler and no DOM.
   //
-  // This repo has no bundler and no browser. What it has is one body of
-  // TypeScript imported by three runtimes at once, which is what every choice
-  // below is about.
+  // `lib` is the platform surface every runtime here actually shares: Node runs
+  // the scrapers and the CLI, vitest runs the tests. WebWorker is in for fetch,
+  // Response, AbortController and URL — the transport is written against the
+  // web-standard fetch that Node has had since 18, not against node-fetch or
+  // http.request, so nothing here depends on a Node built-in it cannot name.
+  // DOM is deliberately absent: an HTML fixture is parsed with regexes over a
+  // string, and a `document` in scope would invite somebody to reach for a
+  // parser that does not exist at runtime.
   //
-  // WHY THE CORE LIVES UNDER supabase/functions/_shared RATHER THAN catalog/src.
-  // A Supabase edge function may only import files inside supabase/functions —
-  // the CLI uploads that directory and nothing above it — so a discovery
-  // function importing `../../../src/discover.ts` type-checks locally and fails
-  // to deploy. `_shared` is Supabase's own convention for exactly this, and
-  // putting the modules there means the code the function runs is the code the
-  // tests run, with no copy step to forget.
-  //
-  // It is imported three ways and has to satisfy all of them at once:
-  //
-  //   * by Node, from catalog/scripts/seed.mjs, using Node 22+'s native type
-  //     stripping — which requires the import specifier to carry the .ts
-  //     extension, hence allowImportingTsExtensions;
-  //   * by Deno, from the discovery edge function, which requires the same;
-  //   * by vitest, from test/catalog/, which does not care either way.
-  //
-  // "moduleResolution": "nodenext" is what makes the explicit extensions legal
-  // rather than an error. The root config uses "bundler", where they are not.
-  //
-  // Run it with: npm run typecheck
+  // erasableSyntaxOnly is the important one. `node --experimental-strip-types`
+  // removes types without rewriting anything, so an enum, a namespace or a
+  // constructor `private x` parameter compiles under tsc and CRASHES under the
+  // very command package.json uses to run this code. Node 22 in CI and Node 24
+  // locally disagree about how loudly, which is exactly the kind of drift that
+  // only shows up in a scheduled scrape at 3am. Let tsc refuse it instead.
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2022", "WebWorker"],
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": false,
     "resolveJsonModule": true,
-    // WebWorker RATHER THAN DOM, and the difference is the point. This code
-    // needs `fetch`, `Response`, `AbortSignal` and `setTimeout` — web-standard
-    // globals that Node, Deno and the browser all have, and that the ES2022 lib
-    // alone does not declare. DOM would declare them too, and would also declare
-    // `document`, `window` and `localStorage`, which would let a browser-only
-    // reference compile in code that runs inside an edge function and a Node
-    // script. WebWorker is the platform surface these three runtimes actually
-    // share.
-    "types": []
+    "types": ["node"]
   },
-  // _shared ONLY, deliberately. The function entrypoints next to it are Deno
-  // programs: they use `Deno.serve`, the `Deno` namespace and `jsr:` specifiers,
-  // none of which tsc can resolve, and pointing it at them produces a page of
-  // "Cannot find name 'Deno'" that says nothing about the code. Deno type-checks
-  // those at deploy time, which is the runtime that will actually run them.
-  //
-  // _shared is the part that has to satisfy three runtimes at once, so it is the
-  // part worth checking here.
-  "include": ["supabase/functions/_shared/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts"]
 }

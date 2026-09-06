@@ -1,0 +1,73 @@
+# Permite Googlebot pentru imagini
+User-agent: Googlebot-image
+Disallow:
+ 
+# Permite Semrush
+User-agent: SemrushBot
+Disallow:
+ 
+User-agent: SemrushBot-SA
+Disallow:
+ 
+# Permite Ahrefs
+User-agent: AhrefsBot
+Disallow:
+ 
+# Permite Screaming Frog
+User-agent: Screaming Frog SEO Spider
+Disallow:
+ 
+# Blocaje standard pentru to?i ceilal?i
+User-agent: *
+Disallow: /account/
+Disallow: /login*
+Disallow: /checkout/
+Disallow: /busca/
+Disallow: /quick-view/
+Disallow: /espiar/
+Disallow: /routing/vtex.store@2.x/
+Disallow: /salesforce/
+Disallow: /no-cache/
+Disallow: /login
+ 
+# Blocare URL-uri cu parametri non-SEO
+Disallow: /*?map=
+Disallow: /*&map=
+Disallow: /*?initialMap=
+Disallow: /*&initialMap=
+Disallow: /*?order=
+Disallow: /*&order=
+Disallow: /*?query=
+Disallow: /*&query=
+Disallow: /*?initialQuery=
+Disallow: /*&initialQuery=
+ 
+# Permite paginarea
+Allow: /*?page=
+ 
+# Blocheaza boti cunoscu?i de scraping
+User-agent: 008
+User-agent: MegaIndex.ru/2.0
+User-agent: MegaIndex.ru
+User-agent: megaIndex.ru
+User-agent: MJ12bot
+User-agent: Yandex
+User-agent: Baiduspider
+User-agent: Synthesio
+User-agent: Riddler
+User-agent: Linguee Bot
+User-agent: PetalBot/AspiegelBot
+User-agent: DotBot
+User-agent: Yandex Bot
+User-agent: WebReaper
+User-agent: WebCopier
+User-agent: Offline Explorer
+User-agent: HTTrack
+User-agent: Microsoft.URL.Control
+User-agent: EmailCollector
+User-agent: penthesilea
+Disallow: /
+ 
+# Sitemap
+Allow: /sitemap.xml
+Sitemap: https://www.auchan.ro/sitemap.xml
