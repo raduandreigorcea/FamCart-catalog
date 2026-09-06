@@ -170,6 +170,39 @@ $fn$;
 comment on function public.catalog_run_fail(uuid, text) is
   'Close a run as failed. Never sweeps: a partial view of a shelf is not evidence of absence.';
 
+-- ─── partial on purpose ──────────────────────────────────────────────────────
+-- The same non-sweep, for a run that was never meant to see the whole shop:
+-- `--limit`, or one slice of a sitemap too big to read in the six hours a CI job
+-- gets.
+--
+-- Distinct from catalog_run_fail because of what somebody reads afterwards.
+-- Both refuse to sweep, so the DATA is identical either way -- but a nightly
+-- Carrefour slice closing as `failed` would put a red row on the dashboard's
+-- Scrapers panel every single night, and an alarm that fires nightly is one
+-- nobody reads. The panel already renders `partial` as "Refused to sweep",
+-- which is exactly what happened and exactly what it should say.
+--
+-- The floor in catalog_run_complete lands runs here too, from the other
+-- direction: it did try to see the shop and came back with too little.
+create or replace function public.catalog_run_partial(p_run_id uuid, p_reason text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+begin
+  update public.catalog_scrape_runs
+     set status      = 'partial',
+         finished_at = now(),
+         error       = left(coalesce(p_reason, 'partial run'), 2000)
+   where id = p_run_id
+     and status = 'running';
+end;
+$fn$;
+
+comment on function public.catalog_run_partial(uuid, text) is
+  'Close a run that was never meant to see the whole shop. Never sweeps.';
+
 -- ─── complete, and the floor ─────────────────────────────────────────────────
 -- The only path that may mark listings unavailable, and it still refuses in two
 -- cases:
@@ -266,9 +299,11 @@ comment on function public.catalog_run_complete(uuid) is
 revoke all on function public.catalog_run_open(text) from public, anon, authenticated;
 revoke all on function public.catalog_run_progress(uuid, integer, integer, integer, integer, jsonb) from public, anon, authenticated;
 revoke all on function public.catalog_run_fail(uuid, text) from public, anon, authenticated;
+revoke all on function public.catalog_run_partial(uuid, text) from public, anon, authenticated;
 revoke all on function public.catalog_run_complete(uuid) from public, anon, authenticated;
 
 grant execute on function public.catalog_run_open(text) to service_role;
 grant execute on function public.catalog_run_progress(uuid, integer, integer, integer, integer, jsonb) to service_role;
 grant execute on function public.catalog_run_fail(uuid, text) to service_role;
+grant execute on function public.catalog_run_partial(uuid, text) to service_role;
 grant execute on function public.catalog_run_complete(uuid) to service_role;

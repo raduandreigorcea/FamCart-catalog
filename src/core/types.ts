@@ -75,6 +75,25 @@ export interface ScrapeContext {
    * not, so its scraper ignores this and says so.
    */
   since?: Date
+  /**
+   * Crawl one deterministic slice of a sitemap: `{ index, of }`, zero-based.
+   *
+   * A shop with 85,000 product pages cannot be read in the six hours a CI job
+   * gets, and the way out is NOT to run the slices at once. The ceiling here is
+   * POLITENESS, not machine time -- five parallel jobs would mean five requests
+   * a second at one shop, which is the thing this whole module exists to avoid.
+   * So the slices run on different NIGHTS, one at a time, and the shop sees the
+   * same steady trickle it always did.
+   *
+   * Deterministic by position rather than by hash, because it has to be
+   * possible to say which night covers a given product without running
+   * anything. Every URL belongs to exactly one slice, so five nights is one
+   * full pass with nothing read twice.
+   *
+   * A sliced run has NOT seen the shop, so it reports incomplete and can never
+   * sweep -- the same rule --limit follows, for the same reason.
+   */
+  shard?: { index: number; of: number }
   /** Somewhere to say what is happening. */
   log: Logger
   /**

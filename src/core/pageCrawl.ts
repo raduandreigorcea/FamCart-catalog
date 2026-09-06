@@ -125,12 +125,36 @@ export async function* crawlProductPages(
     return
   }
 
-  const wanted = supportsIncremental && ctx.since
+  const fresh = supportsIncremental && ctx.since
     ? entries.filter((e) => e.lastmod === null || e.lastmod >= (ctx.since as Date))
     : entries
+
+  // The slice, taken AFTER the incremental filter and by position within it.
+  //
+  // After, because the two answer different questions: --since asks what the
+  // shop has touched, and the slice asks how much of that fits in one night.
+  // Slicing first would hand each night a fifth of the sitemap and then throw
+  // most of it away as unchanged, so four nights in five would do nothing.
+  const wanted = ctx.shard
+    ? fresh.filter((_, i) => i % ctx.shard!.of === ctx.shard!.index)
+    : fresh
   counters.skipped = entries.length - wanted.length
   if (counters.skipped > 0) {
     ctx.log.info(`${retailer}: incremental run`, { fetching: wanted.length, unchanged: counters.skipped })
+  }
+  if (ctx.shard) {
+    ctx.log.info(`${retailer}: slice`, {
+      slice: `${ctx.shard.index + 1}/${ctx.shard.of}`,
+      fetching: wanted.length,
+      of: fresh.length,
+    })
+    // NOT reported through reportIncomplete, though a slice has plainly not seen
+    // the shop. That channel is for a crawl that was truncated by something --
+    // a circuit opening, a host going quiet -- and the CLI keeps only the FIRST
+    // reason it is given. Announcing the slice here would therefore mask a real
+    // truncation that happened later in the same run, which is the one thing
+    // that channel exists to surface. The CLI knows about --shard from its own
+    // arguments and handles it there, exactly as it already does for --limit.
   }
 
   let emitted = 0

@@ -37,7 +37,7 @@ src/retailers/    one directory per shop; the only shop-specific code there is
 src/importer/     validation, batching, the scrape run lifecycle
 src/cli/          scrape and import
 supabase/         six migrations and five pgTAP suites
-test/             124 assertions, all against fixtures captured from live sites
+test/             135 assertions, all against fixtures captured from live sites
 ```
 
 ## The retailers
@@ -124,13 +124,19 @@ npm run scrape:auchan
 npm run scrape:carrefour
 npm run scrape:all               # sequential; naming the two it cannot read
 
-npm test                         # 124 assertions, no network
+npm test                         # 135 assertions, no network
 npm run typecheck
-npm run db:test                  # reset, then 155 pgTAP assertions
+npm run db:test                  # reset, then 181 pgTAP assertions
 ```
 
 Flags: `--dry-run` (no credentials needed, no writes), `--limit N`,
-`--since 2026-09-01`, `--ndjson` (stream products to stdout), `--quiet`.
+`--since 2026-09-01`, `--shard i/n`, `--ndjson` (stream products to stdout),
+`--quiet`.
+
+`--limit` and `--shard` are deliberate partial runs. Both close the run as
+`partial` and neither may sweep -- a run that saw a fifth of a shop has no
+standing to say the other four fifths are gone. That is enforced in the CLI, not
+left as a rule to remember.
 
 Capture once and iterate offline, which is how you avoid re-crawling Carrefour
 for a day to test a parser change:
@@ -139,6 +145,32 @@ for a day to test a parser change:
 npm run scrape -- carrefour --ndjson --dry-run > carrefour.ndjson
 npm run import -- carrefour carrefour.ndjson
 ```
+
+## Scraping on a schedule
+
+`.github/workflows/scrape.yml`, nightly at 01:20 UTC, and dispatchable by hand.
+Two secrets on this repository, the same pair `.env.scripts` holds:
+`CATALOG_SUPABASE_URL` and `CATALOG_SUPABASE_SERVICE_ROLE_KEY`.
+
+| Shop | When | Closes as | Sweeps |
+|---|---|---|---|
+| Lidl | nightly, whole shop | `completed` | yes |
+| Auchan | nightly, whole shop | `completed` | yes |
+| Carrefour | Mon-Fri, one fifth each | `partial` | **no** |
+
+**Carrefour is sliced because of politeness, not machine time.** 85,000 product
+pages at one request a second is a day, and a job gets six hours -- but running
+five slices at once would simply mean five requests a second at one shop. So the
+slices run on different nights, the shop sees the trickle it always did, and the
+whole catalogue is covered every five days.
+
+The cost, stated plainly: **nothing at Carrefour is ever marked unavailable on
+this path.** A delisted product goes stale rather than absent, and `last_seen_at`
+is what tells those apart. Only a full unsliced run would sweep it, which is a
+24-hour job you dispatch by hand.
+
+CI still never scrapes. This is a separate workflow; `ci.yml` runs off committed
+fixtures so a shop being slow or redesigned cannot turn a build red.
 
 ## Credentials
 

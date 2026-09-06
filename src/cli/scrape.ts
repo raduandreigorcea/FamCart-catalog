@@ -1,4 +1,5 @@
-// scrape <retailer|all> [--dry-run] [--limit N] [--since ISO] [--ndjson] [--quiet]
+// scrape <retailer|all> [--dry-run] [--limit N] [--since ISO] [--shard i/n]
+//                        [--ndjson] [--quiet]
 //
 // The one entry point for filling the catalog. It opens a run, streams products
 // from the retailer's generator into batched imports, and closes the run --
@@ -25,6 +26,7 @@ interface Args {
   quiet: boolean
   limit?: number
   since?: Date
+  shard?: { index: number; of: number }
 }
 
 function parseArgs(argv: string[]): Args {
@@ -37,10 +39,27 @@ function parseArgs(argv: string[]): Args {
   }
 
   const limitRaw = flag('limit')
+  const shardRaw = flag('shard')
   const sinceRaw = flag('since')
   const since = sinceRaw ? new Date(sinceRaw) : undefined
   if (since && Number.isNaN(since.getTime())) {
     throw new Error(`--since is not a date: ${sinceRaw}`)
+  }
+
+  // `--shard 2/5` is the third of five slices. One-based on the way in because
+  // that is how a person counts nights, zero-based inside because that is how
+  // the modulo works -- so the parsing happens once, here, and is checked
+  // rather than trusted: a slice index past the end silently crawls nothing,
+  // which would look exactly like a shop that had stopped answering.
+  let shard: { index: number; of: number } | undefined
+  if (shardRaw) {
+    const [indexRaw, ofRaw] = shardRaw.split('/')
+    const index = Number(indexRaw)
+    const of = Number(ofRaw)
+    if (!Number.isInteger(index) || !Number.isInteger(of) || of < 1 || index < 1 || index > of) {
+      throw new Error(`--shard must be i/n with 1 <= i <= n, got: ${shardRaw}`)
+    }
+    shard = { index: index - 1, of }
   }
 
   return {
@@ -50,6 +69,7 @@ function parseArgs(argv: string[]): Args {
     quiet: argv.includes('--quiet'),
     limit: limitRaw ? Number(limitRaw) : undefined,
     since,
+    shard,
   }
 }
 
@@ -87,6 +107,7 @@ async function scrapeOne(
     for await (const product of scraper.discoverProducts({
       limit: args.limit,
       since: args.since,
+      shard: args.shard,
       log,
       signal: controller.signal,
       reportIncomplete: (reason) => {
@@ -115,18 +136,41 @@ async function scrapeOne(
     // silently becomes the baseline that the next truncated run looks healthy
     // against.
     //
-    // `--limit` is a deliberate partial run, and it must not sweep either -- for
-    // exactly the same reason. A comment used to say so and nothing enforced it,
+    // A TRUNCATED CRAWL AND A DELIBERATELY PARTIAL ONE ARE DIFFERENT EVENTS.
+    // Both refuse to sweep, so the catalog ends up identical either way -- but
+    // one is a shop that stopped answering and wants somebody to look, and the
+    // other is Monday.
+    //
+    // The truncated case wins whenever both are true: a slice whose circuit
+    // also opened is a slice that did not even finish its slice, and calling
+    // that "Monday" would hide it.
+    if (incomplete !== null) {
+      throw new Error(`crawl ended early: ${incomplete}`)
+    }
+
+    // `--limit` and `--shard` are deliberate partial runs, and neither may
+    // sweep. A comment used to say so about --limit and nothing enforced it,
     // which made "only point a limited run at a local database" a rule somebody
     // had to remember at 2am. A limited run against the real catalog would have
     // completed, cleared the floor easily, and marked everything it did not
     // reach as no longer sold.
-    if (args.limit !== undefined && incomplete === null) {
-      incomplete = `--limit ${args.limit}: a deliberate partial run`
-    }
+    const deliberate = args.shard
+      ? `--shard ${args.shard.index + 1}/${args.shard.of}: one slice of the shop, by design`
+      : args.limit !== undefined
+        ? `--limit ${args.limit}: a deliberate partial run`
+        : null
 
-    if (incomplete !== null) {
-      throw new Error(`crawl ended early: ${incomplete}`)
+    if (deliberate !== null) {
+      await run.partial(deliberate)
+      log.info('done', {
+        retailer: scraper.retailer,
+        durationMs: Date.now() - started,
+        ...run.totals,
+        verdict: args.dryRun ? 'dry-run' : 'partial',
+      })
+      // Exit 0. This is the expected outcome of a scheduled slice, so a runner
+      // that painted it red would train everybody to ignore a red run.
+      return true
     }
 
     const verdict = await run.complete()
