@@ -1,0 +1,170 @@
+name: Scrape
+
+# Filling the catalog, on a schedule, from a machine nobody is using.
+#
+# WHY THIS EXISTS AT ALL. Scraping was a thing somebody ran on a laptop, which
+# has two failure modes and both of them happened. A crawl that needs a live
+# process for hours gets killed by whatever else the laptop is doing -- four
+# times in one evening, at 1,500 and 2,500 pages -- and, worse, a catalog whose
+# only refresh is manual has prices frozen on the day of the last run somebody
+# remembered to start. Nothing errors. The data just quietly ages.
+#
+# This is a SEPARATE workflow from ci.yml on purpose, and CI still never
+# scrapes: every test there runs off committed fixtures, so a shop being slow or
+# redesigned cannot turn a build red. A redesign is meant to be noticed by a
+# person re-capturing a fixture, not by a build going red at 3am.
+
+on:
+  schedule:
+    # 01:20 UTC, nightly. Off the hour because everybody schedules on the hour
+    # and GitHub's queue is correspondingly lumpy there.
+    - cron: '20 1 * * *'
+  workflow_dispatch:
+    inputs:
+      retailer:
+        description: 'Which shop (auchan, carrefour, lidl, all)'
+        required: true
+        default: all
+      shard:
+        description: 'Slice of the sitemap, as i/n. Carrefour only; blank for the whole shop.'
+        required: false
+        default: ''
+
+# NEVER TWO AT ONCE. Two runs overlapping would double what every shop is asked
+# to put up with, which is the one thing the transport layer is built to
+# prevent -- and it would have both of them importing into the same catalog
+# under different run rows. A queued run waits; it does not cancel the one in
+# flight, because a cancelled crawl is a run that closes as failed and throws
+# away hours of polite fetching.
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+# Read-only. This workflow writes to Supabase and to nothing on GitHub.
+permissions:
+  contents: read
+
+jobs:
+  # ─── the two shops that fit in one job ──────────────────────────────────────
+  # Auchan is a paged API -- 50 products per call, so ~60,000 products is about
+  # 1,200 requests -- and Lidl is 511 pages. Both are done inside an hour, so
+  # both crawl the whole shop, close as `completed`, and are allowed to sweep.
+  # That is the only path by which anything is ever marked as no longer sold.
+  full:
+    name: ${{ matrix.retailer }}
+    if: github.event_name == 'schedule' || inputs.retailer == 'all' || inputs.retailer == matrix.retailer
+    runs-on: ubuntu-latest
+    strategy:
+      # Sequential, not parallel. They are different hosts, so politeness does
+      # not require it -- but one shop failing must not take the other down with
+      # it, and two crawls writing at once is two run rows to read instead of
+      # one. Lidl first because it is ten minutes: if the credentials are wrong,
+      # that is when you find out.
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        retailer: [lidl, auchan]
+    # Generous rather than tight: a job killed by a timeout leaves its run row
+    # `running`, which the reaper in 007 has to clean up 12 hours later. The
+    # crawls themselves are ~10 minutes and ~40.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Scrape ${{ matrix.retailer }}
+        env:
+          CATALOG_SUPABASE_URL: ${{ secrets.CATALOG_SUPABASE_URL }}
+          CATALOG_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CATALOG_SUPABASE_SERVICE_ROLE_KEY }}
+        run: npm run scrape -- ${{ matrix.retailer }}
+
+  # ─── the shop that does not fit ─────────────────────────────────────────────
+  # Carrefour publishes 85,000 product pages and there is no API. At one request
+  # a second -- which is the rate the shop is asked to tolerate, not a rate we
+  # chose for convenience -- that is a full day, and a job here gets six hours.
+  #
+  # THE WAY OUT IS FIVE NIGHTS, NOT FIVE PARALLEL JOBS. The ceiling is
+  # politeness, so running the slices at once would simply mean five requests a
+  # second at one shop: the same work, done rudely. Spread over nights, the shop
+  # sees exactly the trickle it always did and the whole catalogue is covered
+  # every five days.
+  #
+  # A SLICE CAN NEVER SWEEP, and the CLI enforces that rather than trusting this
+  # comment: it closes the run as `partial` -- neither a failure nor a success,
+  # imported what it saw, no standing to say anything about the rest.
+  #
+  # The cost is real and worth stating plainly: on this path Carrefour products
+  # are never marked unavailable, so a delisted one goes stale rather than
+  # absent. `last_seen_at` is what tells those apart, and a full unsliced run
+  # (dispatch by hand with the shard field blank, on a day you can spare the
+  # 24 hours) is the only thing that would sweep.
+  carrefour:
+    name: carrefour
+    if: github.event_name == 'schedule' || inputs.retailer == 'all' || inputs.retailer == 'carrefour'
+    runs-on: ubuntu-latest
+    # Under GitHub's six-hour ceiling with room to spare. A slice is ~17,000
+    # pages, so a little over four and a half hours at the polite rate.
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # Monday is slice 1, Friday is slice 5, and the weekend is left alone --
+      # five slices over five nights, from the day of the week rather than from
+      # any stored state. Nothing to persist, nothing to drift, and a missed
+      # night is one slice late rather than an offset that never recovers.
+      - name: Choose tonight's slice
+        id: slice
+        # The dispatch input arrives as an environment variable rather than
+        # being pasted into the script. `${{ }}` is substituted before bash sees
+        # the line, so an input containing a quote or a semicolon would be
+        # running as part of this step rather than being read by it.
+        env:
+          SHARD: ${{ inputs.shard }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ -n "$SHARD" ]; then
+            # Checked, not trusted. The value ends up inside a command line, and
+            # a typo should fail here with a readable message rather than
+            # further down as a scraper argument nobody recognises.
+            case "$SHARD" in
+              [1-9]/[1-9]|[1-9]/[1-9][0-9]) : ;;
+              *) echo "shard must look like 1/5, got: $SHARD" >&2; exit 1 ;;
+            esac
+            echo "arg=--shard $SHARD" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT" != "schedule" ]; then
+            # A manual run with the field left blank means the whole shop, which
+            # is the only run that may ever sweep. Deliberate, and slow.
+            echo "arg=" >> "$GITHUB_OUTPUT"
+          else
+            DAY=$(date -u +%u)   # 1 = Monday
+            if [ "$DAY" -gt 5 ]; then
+              echo "skip=1" >> "$GITHUB_OUTPUT"
+            else
+              echo "arg=--shard $DAY/5" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Scrape carrefour
+        if: steps.slice.outputs.skip != '1'
+        env:
+          CATALOG_SUPABASE_URL: ${{ secrets.CATALOG_SUPABASE_URL }}
+          CATALOG_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CATALOG_SUPABASE_SERVICE_ROLE_KEY }}
+          SLICE: ${{ steps.slice.outputs.arg }}
+        # No `|| true`. A sliced run closes its run row as `partial` and exits
+        # ZERO, because being one fifth of a shop is the expected outcome here
+        # and a step that went red nightly would train everybody to ignore red.
+        # Anything that does fail -- a circuit opening, bad credentials, the
+        # shop going quiet -- still exits non-zero and still turns this red,
+        # which is the whole point of not swallowing it.
+        # $SLICE unquoted on purpose: it is either empty or the two words
+        # `--shard 1/5`, and quoting it would hand the scraper one argument that
+        # is an empty string when there is no slice.
+        run: npm run scrape -- carrefour $SLICE

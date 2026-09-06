@@ -186,6 +186,26 @@ export class ScrapeRun {
     return verdict
   }
 
+  /**
+   * Close a run that was never meant to see the whole shop -- `--limit`, or one
+   * slice of a sitemap too big for a single job.
+   *
+   * Sweeps nothing, exactly like fail(). The difference is what somebody reads
+   * afterwards: a nightly slice closing as `failed` would put a red row on the
+   * dashboard every night, and an alarm that fires nightly is one nobody reads.
+   */
+  async partial(reason: string): Promise<void> {
+    await this.flush()
+    this.log.info('run closed as partial', { retailer: this.retailer, reason })
+    if (this.dryRun || !this.runId) return
+    await this.heartbeat()
+    const { error } = await this.db.rpc('catalog_run_partial', {
+      p_run_id: this.runId,
+      p_reason: reason,
+    })
+    if (error) this.log.error('could not close the run', { error: describe(error) })
+  }
+
   /** Close as failed. Sweeps nothing, by construction. */
   async fail(reason: unknown): Promise<void> {
     const message = reason instanceof Error ? reason.message : String(reason)

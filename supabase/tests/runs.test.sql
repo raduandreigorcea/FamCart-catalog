@@ -9,7 +9,7 @@
 -- property of the test, not of the schema: in production the runs are minutes or
 -- days apart and catalog_run_open's default is right.
 begin;
-select plan(29);
+select plan(35);
 
 delete from public.catalog_scrape_runs;
 delete from public.catalog_listings;
@@ -159,6 +159,45 @@ select alike((select error from public.catalog_scrape_runs where id = :'ab_run_i
 select public.catalog_run_open('lidl') as run_id \gset fresh_
 select is(public.catalog_run_reap(), 0,
   'and leaves a run that only just started alone');
+
+-- ─── a run that was never meant to see the whole shop ────────────────────────
+-- Carrefour has 85,000 product pages and a CI job gets six hours, so a nightly
+-- run reads one fifth of the sitemap. That is not a failure and it is not a
+-- success: it imported what it saw and has no standing to say anything about
+-- the rest.
+--
+-- It exists as its own status because of what somebody reads afterwards. Closing
+-- these as `failed` would put a red row on the dashboard every single night,
+-- and an alarm that fires nightly is one nobody reads -- so the real Carrefour
+-- outage, when it comes, would look exactly like Monday.
+select public.catalog_run_open('carrefour') as run_id \gset s_
+update public.catalog_scrape_runs set started_at = now() - interval '3 hours' where id = :'s_run_id';
+select public.catalog_import_listings($j$[
+  {"external_id":"C9","name":"Lapte Zuzu 1L","brand":"Zuzu","price":8.49,"currency":"RON",
+   "quantity":1,"unit":"l","product_url":"https://carrefour.ro/produse/c9","available":true}
+]$j$::jsonb, 'carrefour', :'s_run_id'::uuid);
+select public.catalog_run_progress(:'s_run_id'::uuid, 1, 1, 0, 0);
+select public.catalog_run_partial(:'s_run_id'::uuid, '--shard 1/5: one slice of the shop, by design');
+
+select is((select status from public.catalog_scrape_runs where id = :'s_run_id'), 'partial',
+  'a deliberate slice is partial, which is neither a failure nor a success');
+select is((select count(*)::int from public.catalog_listings l
+             join public.catalog_retailers r on r.id = l.retailer_id
+            where r.slug = 'carrefour' and not l.available), 0,
+  'THE RULE AGAIN: a slice marks nothing unavailable');
+select is((select marked_unavailable from public.catalog_scrape_runs where id = :'s_run_id'), 0,
+  'and says it swept nothing');
+select ok(
+  (select error from public.catalog_scrape_runs where id = :'s_run_id') like '%shard%',
+  'keeping the reason, so "partial" is never a mystery');
+select is((select count(*)::int from public.catalog_listings l
+             join public.catalog_retailers r on r.id = l.retailer_id
+            where r.slug = 'carrefour' and l.external_id = 'C9'), 1,
+  'and what it DID see is imported and kept, like every other run');
+
+-- A client must not be able to close a run at all, by any of the three doors.
+select ok(not has_function_privilege('authenticated', 'public.catalog_run_partial(uuid, text)', 'execute'),
+  'and no client may close a run as partial any more than as completed');
 
 select * from finish();
 rollback;

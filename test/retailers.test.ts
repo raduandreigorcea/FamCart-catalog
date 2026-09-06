@@ -275,6 +275,86 @@ describe('carrefour', () => {
     expect(products.length).toBe(2)
     expect(callsOf(fetchImpl).some((u) => u.includes('/bacanie-carrefour/'))).toBe(false)
   })
+
+  // ─── slices ───────────────────────────────────────────────────────────────
+  // 85,000 product pages at one request a second is a day, and a CI job gets
+  // six hours. The way out is five nights, not five parallel jobs -- the
+  // ceiling is what the shop is asked to put up with, not what a machine can
+  // do.
+  //
+  // Which makes the property below the only one that matters: the slices have
+  // to PARTITION the sitemap. Overlap means a page fetched twice a week for
+  // nothing; a gap means products nobody ever looks at again, silently, and
+  // there is no error anywhere to say which.
+  describe('slices', () => {
+    const routes = [
+      { match: '/robots.txt', file: 'carrefour/robots.txt' },
+      { match: 'sitemap.xml', file: 'carrefour/sitemap-index.xml' },
+      { match: 'sitemap_001', body: '<urlset></urlset>' },
+      { match: 'sitemap_002', file: 'carrefour/sitemap-products.xml' },
+      { match: '/produse/', file: 'carrefour/product-instock.html.gz' },
+    ]
+
+    /** The product pages one slice actually fetched. */
+    async function pagesOf(shard?: { index: number; of: number }) {
+      const fetchImpl = fixtureFetch(routes)
+      await collect(
+        new CarrefourScraper().discoverProducts({
+          log: testLogger(),
+          fetchImpl,
+          minIntervalMs: 0,
+          shard,
+        }),
+        200,
+      )
+      return callsOf(fetchImpl).filter((u) => u.includes('/produse/'))
+    }
+
+    it('covers every page exactly once across the set', async () => {
+      const whole = await pagesOf()
+      const slices = await Promise.all(
+        [0, 1, 2, 3, 4].map((index) => pagesOf({ index, of: 5 })),
+      )
+      const together = slices.flat()
+      expect(together.slice().sort()).toEqual(whole.slice().sort())
+      expect(new Set(together).size).toBe(together.length)
+    })
+
+    it('splits the work roughly evenly', async () => {
+      const sizes = []
+      for (const index of [0, 1, 2, 3, 4]) sizes.push((await pagesOf({ index, of: 5 })).length)
+      // 50 URLs, five slices. Positional slicing cannot be lumpier than one.
+      expect(Math.max(...sizes) - Math.min(...sizes)).toBeLessThanOrEqual(1)
+    })
+
+    it('gives the whole shop to a set of one', async () => {
+      expect((await pagesOf({ index: 0, of: 1 })).length).toBe((await pagesOf()).length)
+    })
+
+    it('LEAVES THE TRUNCATION CHANNEL ALONE', async () => {
+      // A slice has plainly not seen the shop, and it still must not say so
+      // through reportIncomplete. That channel is for a crawl cut short by
+      // something -- a circuit opening, a host going quiet -- and the CLI keeps
+      // only the FIRST reason it is handed. A slice announcing itself at the
+      // top of every run would therefore mask a real truncation later in the
+      // same run, which is the single thing that channel exists to surface.
+      //
+      // The slice is a fact the CLI already knows from its own arguments, and
+      // that is where it closes the run as partial.
+      const reasons: string[] = []
+      await collect(
+        new CarrefourScraper().discoverProducts({
+          log: testLogger(),
+          fetchImpl: fixtureFetch(routes),
+          minIntervalMs: 0,
+          shard: { index: 1, of: 5 },
+          reportIncomplete: (reason) => reasons.push(reason),
+        }),
+        200,
+      )
+      expect(reasons).toEqual([])
+    })
+  })
 })
 
 // ─── Lidl ────────────────────────────────────────────────────────────────────
