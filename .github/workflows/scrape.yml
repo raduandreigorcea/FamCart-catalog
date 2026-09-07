@@ -52,7 +52,6 @@ jobs:
   # That is the only path by which anything is ever marked as no longer sold.
   full:
     name: ${{ matrix.retailer }}
-    if: github.event_name == 'schedule' || inputs.retailer == 'all' || inputs.retailer == matrix.retailer
     runs-on: ubuntu-latest
     strategy:
       # Sequential, not parallel. They are different hosts, so politeness does
@@ -75,7 +74,24 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # The shop filter lives on the STEP, not on the job, and that is not a
+      # style choice: a job-level `if` is evaluated before the matrix is
+      # expanded, so `matrix.retailer` does not exist there yet. GitHub rejects
+      # the whole FILE for it -- no name, no schedule, and a failed run against
+      # whatever push happened to carry it. The workflow simply never runs, and
+      # the only hint is that the Actions tab lists it by path instead of by
+      # name.
+      #
+      # `github.event.inputs` rather than `inputs` for the same class of reason:
+      # the `inputs` context exists only for workflow_dispatch and
+      # workflow_call, so naming it in a workflow that also runs on a schedule
+      # is another way to make the file unparseable. `github.event.inputs` is
+      # defined everywhere and is simply empty when nobody filled a form in.
       - name: Scrape ${{ matrix.retailer }}
+        if: >-
+          github.event_name == 'schedule'
+          || github.event.inputs.retailer == 'all'
+          || github.event.inputs.retailer == matrix.retailer
         env:
           CATALOG_SUPABASE_URL: ${{ secrets.CATALOG_SUPABASE_URL }}
           CATALOG_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CATALOG_SUPABASE_SERVICE_ROLE_KEY }}
@@ -103,7 +119,10 @@ jobs:
   # 24 hours) is the only thing that would sweep.
   carrefour:
     name: carrefour
-    if: github.event_name == 'schedule' || inputs.retailer == 'all' || inputs.retailer == 'carrefour'
+    if: >-
+      github.event_name == 'schedule'
+      || github.event.inputs.retailer == 'all'
+      || github.event.inputs.retailer == 'carrefour'
     runs-on: ubuntu-latest
     # Under GitHub's six-hour ceiling with room to spare. A slice is ~17,000
     # pages, so a little over four and a half hours at the polite rate.
@@ -127,7 +146,7 @@ jobs:
         # the line, so an input containing a quote or a semicolon would be
         # running as part of this step rather than being read by it.
         env:
-          SHARD: ${{ inputs.shard }}
+          SHARD: ${{ github.event.inputs.shard }}
           EVENT: ${{ github.event_name }}
         run: |
           if [ -n "$SHARD" ]; then
