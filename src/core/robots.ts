@@ -4,8 +4,8 @@
 // refuses to start if the shop has said no. That is a real gate rather than a
 // gesture: all three retailers here allow their product pages and sitemaps
 // today, and if one of them stops, the correct behaviour is for the scraper to
-// fail loudly and for somebody to read docs/retailers.md again -- not to keep
-// going because the code never asked.
+// fail loudly and for somebody to look at that shop again -- not to keep going
+// because the code never asked.
 //
 // This is a deliberately small parser. It handles the directives that actually
 // appear in the three files we read (User-agent, Allow, Disallow, Crawl-delay,

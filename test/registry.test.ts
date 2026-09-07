@@ -56,11 +56,23 @@ describe('the retailer registry', () => {
     expect(megaImage.implemented).toBe(false)
   })
 
-  it('says why an unimplemented retailer is unimplemented', () => {
+  it('says why an unimplemented retailer is unimplemented, HERE', () => {
+    // The note used to end with "See docs/retailers.md", and the assertion
+    // checked for exactly that pointer. Then the docs went, which is the moment
+    // a deferral becomes a dead end -- so the note now has to carry the finding
+    // itself, and this checks that rather than checking that it points away.
     for (const scraper of SCRAPERS.filter((s) => !s.implemented)) {
-      expect(scraper.note, `${scraper.retailer} note`).toBeTruthy()
-      expect(scraper.note!.length).toBeGreaterThan(40)
-      expect(scraper.note).toContain('docs/retailers.md')
+      const note = scraper.note ?? ''
+      expect(note, `${scraper.retailer} note`).toBeTruthy()
+      // Long enough to be a reason rather than a label. "Not implemented" is
+      // 15 characters and says nothing anybody can act on.
+      expect(note.length, `${scraper.retailer} note length`).toBeGreaterThan(80)
+      // Naming the site is what makes it re-checkable: a shop that was
+      // unreadable in 2026 may not be next year, and whoever looks needs to
+      // know where to look.
+      expect(note, `${scraper.retailer} names its site`).toContain(scraper.domain)
+      // And it must not send the reader somewhere else for the actual answer.
+      expect(note, `${scraper.retailer} defers`).not.toMatch(/see .*\.md/i)
     }
   })
 
