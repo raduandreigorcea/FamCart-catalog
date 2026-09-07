@@ -51,8 +51,9 @@ test/             135 assertions, all against fixtures captured from live sites
 | Mega Image | -- | -- | -- | -- |
 
 Kaufland has no online assortment to read, and Mega Image is readable but
-deliberately deferred. `docs/retailers.md` records exactly what was probed for
-each, so nobody has to work it out again.
+deliberately deferred. Both keep an entry in `src/core/registry.ts` carrying the
+reason, so nobody has to work it out again -- and so `scrape:all` names them
+instead of silently passing over them.
 
 ## The two rules everything else follows from
 
@@ -187,7 +188,6 @@ household database the default target of every load.
 
 ## Adding a retailer
 
-`docs/adding-a-retailer.md`. Short version: analyse the site before writing
-anything, add a directory under `src/retailers/`, add a line to
-`src/core/registry.ts` and a row to `002_catalog.sql`. Nothing in the pipeline
-changes.
+Analyse the site before writing anything, add a directory under
+`src/retailers/`, add a line to `src/core/registry.ts` and a row to
+`002_catalog.sql`. Nothing in the pipeline changes.

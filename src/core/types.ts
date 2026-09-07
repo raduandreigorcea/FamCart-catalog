@@ -146,20 +146,7 @@ export interface RetailerScraper {
    * absent for a reason should be visible next to the ones that work.
    */
   readonly implemented: boolean
-  /** Why, in one line, when implemented is false. See docs/retailers.md. */
+  /** Why, in one line, when implemented is false. */
   readonly note?: string
   discoverProducts(ctx: ScrapeContext): AsyncGenerator<RetailerProduct>
-}
-
-/** What a run reports, per the observability section of the README. */
-export interface ScrapeStats {
-  retailer: string
-  found: number
-  valid: number
-  rejected: number
-  errors: number
-}
-
-export function emptyStats(retailer: string): ScrapeStats {
-  return { retailer, found: 0, valid: 0, rejected: 0, errors: 0 }
 }

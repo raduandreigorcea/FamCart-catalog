@@ -23,14 +23,3 @@ export function createLogger(scope: string, quiet = false): Logger {
     error: (message, fields) => write('error', message, fields),
   }
 }
-
-/** For tests and dry runs: keeps everything, prints nothing. */
-export function createMemoryLogger(): Logger & { lines: Array<{ level: string; message: string }> } {
-  const lines: Array<{ level: string; message: string }> = []
-  return {
-    lines,
-    info: (message) => void lines.push({ level: 'info', message }),
-    warn: (message) => void lines.push({ level: 'warn', message }),
-    error: (message) => void lines.push({ level: 'error', message }),
-  }
-}
