@@ -609,7 +609,7 @@ grant select on public.catalog_listings    to authenticated;
 --
 -- Kaufland and Mega Image are deliberately ABSENT rather than present-and-
 -- disabled: neither has a scraper, and a row here is a claim that data can
--- arrive. docs/retailers.md records what was probed and why.
+-- arrive. The registry entry records what was probed and why.
 insert into public.catalog_retailers (slug, name, country, domain) values
   ('auchan',    'Auchan',    'RO', 'auchan.ro'),
   ('carrefour', 'Carrefour', 'RO', 'carrefour.ro'),
