@@ -170,6 +170,22 @@ export class HttpClient {
       const onOuterAbort = () => controller.abort()
       init.signal?.addEventListener('abort', onOuterAbort, { once: true })
 
+      // THE GAP IS MEASURED FROM HERE, not from when the answer arrives.
+      //
+      // It used to be stamped after the response, which makes the real cadence
+      // `response time + minInterval` rather than `minInterval`. On a shop
+      // serving 300 KB pages in about 1.9 seconds that turned a nominal one
+      // request per second into one every 2.89 -- measured, not guessed -- and
+      // the arithmetic built on top of it was wrong by a factor of three: a
+      // Carrefour slice budgeted at 4.7 hours actually needs 13.7, so the
+      // nightly job was being cut off by its own timeout every time, three
+      // quarters of the way short, with nothing saying so.
+      //
+      // Stamping it here makes the cadence max(minInterval, response time),
+      // which is what "at most one request a second" has always meant. It asks
+      // no more of the shop than the old code did on its fastest page.
+      state.nextAllowedAt = this.now() + this.minIntervalMs
+
       try {
         const response = await this.fetchImpl(url, {
           ...init,
@@ -179,7 +195,6 @@ export class HttpClient {
         // arrayBuffer, then decode: text() would be lossy for the gzip files.
         const bytes = new Uint8Array(await response.arrayBuffer())
         const body = new TextDecoder('utf-8').decode(bytes)
-        state.nextAllowedAt = this.now() + this.minIntervalMs
 
         // 429 and 5xx are the shop asking for room. Back off and try again.
         if (response.status === 429 || response.status >= 500) {
@@ -219,6 +234,10 @@ export class HttpClient {
         lastError = error
         if (tolerant) throw error
         state.failures++
+        // Re-stamped from HERE on a failure, unlike the success path. A timeout
+        // means the host took the whole window and said nothing, and the polite
+        // response to that is a fresh gap after it -- not one measured from a
+        // request that never landed.
         state.nextAllowedAt = this.now() + this.minIntervalMs
         if (state.failures >= this.tripAfter) {
           state.openUntil = this.now() + this.cooldownMs
