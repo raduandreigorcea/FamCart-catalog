@@ -164,10 +164,20 @@ five slices at once would simply mean five requests a second at one shop. So the
 slices run on different nights, the shop sees the trickle it always did, and the
 whole catalogue is covered every five days.
 
-The cost, stated plainly: **nothing at Carrefour is ever marked unavailable on
-this path.** A delisted product goes stale rather than absent, and `last_seen_at`
-is what tells those apart. Only a full unsliced run would sweep it, which is a
-24-hour job you dispatch by hand.
+The cost, stated plainly: **nothing at Carrefour is ever marked unavailable.** A
+delisted product goes stale rather than absent, and `last_seen_at` is what tells
+those apart.
+
+There is no full run available to put that right. A hosted job is capped at six
+hours and reading all 85,000 pages politely is about twenty-four, so the
+workflow refuses a blank shard rather than spending five and a half hours
+arriving at the same place. `--since` does not rescue it: an incremental run
+skips the pages the shop has not touched, and a page not fetched is a listing
+not touched, which the sweep would read as absent.
+
+The way out, when it matters enough, is that the sitemap is the shop's own
+complete statement of what exists and it arrives in one request -- a "seen these
+ids" call against it would sweep without crawling anything.
 
 CI still never scrapes. This is a separate workflow; `ci.yml` runs off committed
 fixtures so a shop being slow or redesigned cannot turn a build red.

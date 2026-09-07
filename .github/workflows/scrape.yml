@@ -114,9 +114,27 @@ jobs:
   #
   # The cost is real and worth stating plainly: on this path Carrefour products
   # are never marked unavailable, so a delisted one goes stale rather than
-  # absent. `last_seen_at` is what tells those apart, and a full unsliced run
-  # (dispatch by hand with the shard field blank, on a day you can spare the
-  # 24 hours) is the only thing that would sweep.
+  # absent. `last_seen_at` is what tells those apart.
+  #
+  # AND THERE IS NO FULL RUN HERE TO PUT THAT RIGHT. A hosted job is capped at
+  # six hours by GitHub, and reading all 85,000 pages at the polite rate is
+  # about twenty-four. Raising `timeout-minutes` cannot buy the difference --
+  # 360 is the ceiling, not a default. So the sweep is not something this
+  # workflow is postponing; it is something it cannot do, and the step below
+  # refuses a blank shard rather than spending five and a half hours arriving
+  # at the same answer.
+  #
+  # `--since` does not rescue it either, though it looks as though it should.
+  # An incremental run fetches only the pages the shop has touched, which is
+  # exactly what makes it fast -- and a page not fetched is a listing not
+  # touched, which the sweep would read as absent. Any run that may sweep has
+  # to look at everything.
+  #
+  # The way out, when it matters enough: the sitemap is the shop's own complete
+  # statement of what exists, and it arrives in one request. A `seen these ids`
+  # call against that would sweep for the cost of a single fetch, without
+  # crawling anything. That is new machinery in the catalog rather than a knob
+  # here, which is why it is a note and not a line of YAML.
   carrefour:
     name: carrefour
     if: >-
@@ -159,9 +177,16 @@ jobs:
             esac
             echo "arg=--shard $SHARD" >> "$GITHUB_OUTPUT"
           elif [ "$EVENT" != "schedule" ]; then
-            # A manual run with the field left blank means the whole shop, which
-            # is the only run that may ever sweep. Deliberate, and slow.
-            echo "arg=" >> "$GITHUB_OUTPUT"
+            # A blank shard on a manual run means "the whole shop", and the
+            # whole shop does not fit. Refusing here costs a second; the
+            # alternative is five and a half hours of polite fetching thrown
+            # away by the job timeout, landing in exactly the state a slice
+            # would have reached -- except with a run row left `running` for
+            # the reaper to tidy up twelve hours later.
+            echo "a full Carrefour run does not fit in a GitHub job." >&2
+            echo "85,194 pages at one request a second is ~24h; the ceiling is 6h." >&2
+            echo "Pass a slice, e.g. shard=1/5, or run it somewhere without the ceiling." >&2
+            exit 1
           else
             DAY=$(date -u +%u)   # 1 = Monday
             if [ "$DAY" -gt 5 ]; then
