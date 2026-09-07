@@ -82,6 +82,46 @@ describe('HttpClient', () => {
     expect(clock.now()).toBeGreaterThanOrEqual(2000)
   })
 
+  // THE ONE THAT COST THREE HOURS A NIGHT.
+  //
+  // Every test above answers instantly, so the clock does not move while a
+  // request is in flight and both readings of "one request a second" look
+  // identical. A real shop takes ~1.9s to hand over a 300 KB page, and stamping
+  // the gap AFTER that made the true cadence 2.89s -- measured on a live crawl.
+  // A Carrefour slice budgeted at 4.7 hours actually needed 13.7, so the nightly
+  // job was cut off by its own timeout every time, three quarters short, with
+  // nothing anywhere saying so.
+  it('measures the gap from when a request STARTS, not when it finishes', async () => {
+    const clock = fakeClock()
+    // A shop that takes 1.9s to answer, the way Carrefour actually does.
+    const slow = (async () => {
+      clock.advance(1900)
+      return new Response('body', { status: 200 })
+    }) as unknown as typeof fetch
+
+    const client = new HttpClient({ fetchImpl: slow, minIntervalMs: 1000, ...clock })
+    await client.get('https://example.test/a')
+    await client.get('https://example.test/b')
+    await client.get('https://example.test/c')
+
+    // Three responses at 1.9s each is 5700ms of pure waiting on the shop. The
+    // gap adds nothing on top, because 1000ms has already passed inside each
+    // one -- which is what max(interval, response) means. The old code came to
+    // 8700ms and called it one request per second.
+    expect(clock.now()).toBe(5700)
+  })
+
+  it('still holds the gap when the shop answers instantly', async () => {
+    // The other half: the promise is at MOST one request per second, and a fast
+    // host must not be hammered just because nothing else is slowing us down.
+    const { impl } = scriptedFetch([200])
+    const clock = fakeClock()
+    const client = new HttpClient({ fetchImpl: impl, minIntervalMs: 1000, ...clock })
+    await client.get('https://example.test/a')
+    await client.get('https://example.test/b')
+    expect(clock.now()).toBe(1000)
+  })
+
   it('paces hosts independently, so one slow shop does not gate another', async () => {
     const { impl } = scriptedFetch([200])
     const clock = fakeClock()

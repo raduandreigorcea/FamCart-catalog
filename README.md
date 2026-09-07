@@ -157,13 +157,20 @@ Two secrets on this repository, the same pair `.env.scripts` holds:
 |---|---|---|---|
 | Lidl | nightly, whole shop | `completed` | yes |
 | Auchan | nightly, whole shop | `completed` | yes |
-| Carrefour | Mon-Fri, one fifth each | `partial` | **no** |
+| Carrefour | nightly, one fourteenth each | `partial` | **no** |
 
 **Carrefour is sliced because of politeness, not machine time.** 85,000 product
-pages at one request a second is a day, and a job gets six hours -- but running
-five slices at once would simply mean five requests a second at one shop. So the
-slices run on different nights, the shop sees the trickle it always did, and the
-whole catalogue is covered every five days.
+pages is about forty-five hours of polite fetching and a job gets six -- but
+running the slices at once would simply mean several requests a second at one
+shop. So they run on different nights, the shop sees the trickle it always did,
+and the whole catalogue is covered every fortnight.
+
+Fourteen is measured, not chosen. A live crawl came back at 2.89 seconds a page:
+the shop takes about 1.9 to hand over a 300 KB page, and the politeness gap used
+to be added on top of that rather than overlapped with it. It is stamped from
+the start of a request now, so the cadence is `max(1s, response time)` -- which
+is what "at most one request a second" always meant, and asks no more of the
+shop than the old code did on its fastest page.
 
 The cost, stated plainly: **nothing at Carrefour is ever marked unavailable.** A
 delisted product goes stale rather than absent, and `last_seen_at` is what tells
