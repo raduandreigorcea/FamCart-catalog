@@ -25,10 +25,6 @@ on:
         description: 'Which shop (auchan, carrefour, lidl, all)'
         required: true
         default: all
-      shard:
-        description: 'Slice of the sitemap, as i/n. Carrefour only; blank for the whole shop.'
-        required: false
-        default: ''
 
 # NEVER TWO AT ONCE. Two runs overlapping would double what every shop is asked
 # to put up with, which is the one thing the transport layer is built to
@@ -45,11 +41,12 @@ permissions:
   contents: read
 
 jobs:
-  # ─── the two shops that fit in one job ──────────────────────────────────────
+  # ─── all three, whole ───────────────────────────────────────────────────────
   # Auchan is a paged API -- 50 products per call, so ~60,000 products is about
-  # 1,200 requests -- and Lidl is 511 pages. Both are done inside an hour, so
-  # both crawl the whole shop, close as `completed`, and are allowed to sweep.
-  # That is the only path by which anything is ever marked as no longer sold.
+  # 1,200 requests. Lidl is 511 pages. Carrefour reads department listings at
+  # 24 products a request. All three crawl the whole shop, close as `completed`,
+  # and are therefore allowed to sweep -- which is the only path by which
+  # anything is ever marked as no longer sold.
   full:
     name: ${{ matrix.retailer }}
     runs-on: ubuntu-latest
@@ -62,11 +59,11 @@ jobs:
       max-parallel: 1
       fail-fast: false
       matrix:
-        retailer: [lidl, auchan]
+        retailer: [lidl, auchan, carrefour]
     # Generous rather than tight: a job killed by a timeout leaves its run row
     # `running`, which the reaper in 007 has to clean up 12 hours later. The
-    # crawls themselves are ~10 minutes and ~40.
-    timeout-minutes: 180
+    # crawls themselves are ~10 minutes, ~40 and ~2 hours.
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -97,136 +94,14 @@ jobs:
           CATALOG_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CATALOG_SUPABASE_SERVICE_ROLE_KEY }}
         run: npm run scrape -- ${{ matrix.retailer }}
 
-  # ─── the shop that does not fit ─────────────────────────────────────────────
-  # Carrefour publishes 85,000 product pages and there is no API. At one request
-  # a second -- which is the rate the shop is asked to tolerate, not a rate we
-  # chose for convenience -- that is a full day, and a job here gets six hours.
+  # Carrefour used to live in its own job, cut into fourteen nightly slices,
+  # because 85,119 product pages is about forty-five hours of polite fetching
+  # against a six-hour ceiling. It reads department listings now -- twenty-four
+  # products per request instead of one -- so the whole shop takes about two
+  # hours and it belongs up there with the others.
   #
-  # THE WAY OUT IS MORE NIGHTS, NOT PARALLEL JOBS. The ceiling is politeness, so
-  # running the slices at once would simply mean several requests a second at
-  # one shop: the same work, done rudely. Spread over nights, the shop sees
-  # exactly the trickle it always did.
-  #
-  # FOURTEEN slices, and the number is measured rather than chosen. A live crawl
-  # came back at 2.89 seconds a page -- the shop takes about 1.9 to hand over a
-  # 300 KB page and the politeness gap was being added on top of that instead of
-  # overlapping it. At the corrected pace a five-hour job covers about 9,500
-  # pages, so 85,194 needs nine slices; fourteen leaves the margin the first
-  # estimate did not have.
-  #
-  # It was five, from arithmetic that assumed a page arrives instantly. Each
-  # slice then wanted 13.7 hours against a 5.5 hour cap, so every night was cut
-  # off three quarters short and began the same slice again the next evening.
-  # Coverage never advanced past the first fifth, and nothing reported a fault:
-  # a truncated run closes as failed, which on this path is indistinguishable
-  # from the shop having a bad night.
-  #
-  # A SLICE CAN NEVER SWEEP, and the CLI enforces that rather than trusting this
-  # comment: it closes the run as `partial` -- neither a failure nor a success,
-  # imported what it saw, no standing to say anything about the rest.
-  #
-  # The cost is real and worth stating plainly: on this path Carrefour products
-  # are never marked unavailable, so a delisted one goes stale rather than
-  # absent. `last_seen_at` is what tells those apart.
-  #
-  # AND THERE IS NO FULL RUN HERE TO PUT THAT RIGHT. A hosted job is capped at
-  # six hours by GitHub, and reading all 85,000 pages at the polite rate is
-  # about twenty-four. Raising `timeout-minutes` cannot buy the difference --
-  # 360 is the ceiling, not a default. So the sweep is not something this
-  # workflow is postponing; it is something it cannot do, and the step below
-  # refuses a blank shard rather than spending five and a half hours arriving
-  # at the same answer.
-  #
-  # `--since` does not rescue it either, though it looks as though it should.
-  # An incremental run fetches only the pages the shop has touched, which is
-  # exactly what makes it fast -- and a page not fetched is a listing not
-  # touched, which the sweep would read as absent. Any run that may sweep has
-  # to look at everything.
-  #
-  # The way out, when it matters enough: the sitemap is the shop's own complete
-  # statement of what exists, and it arrives in one request. A `seen these ids`
-  # call against that would sweep for the cost of a single fetch, without
-  # crawling anything. That is new machinery in the catalog rather than a knob
-  # here, which is why it is a note and not a line of YAML.
-  carrefour:
-    name: carrefour
-    if: >-
-      github.event_name == 'schedule'
-      || github.event.inputs.retailer == 'all'
-      || github.event.inputs.retailer == 'carrefour'
-    runs-on: ubuntu-latest
-    # Under GitHub's six-hour ceiling with room to spare. A slice is ~6,100
-    # pages, so a little over three hours at the MEASURED pace -- the margin is
-    # deliberate this time, the previous number having been an estimate that
-    # turned out to be a third of the truth.
-    timeout-minutes: 330
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-
-      # One slice a night, every night, cycling through all fourteen -- so a full
-      # pass takes a fortnight.
-      #
-      # The index is days-since-epoch modulo 14 rather than the day of the week.
-      # A weekday can only ever name five or seven slices, and the day of the
-      # YEAR skips one every new year, since 365 is not a multiple of 14. Days
-      # since epoch simply counts, so the cycle is exact and needs nothing
-      # stored: no state to drift, and a missed night is one slice late rather
-      # than an offset that never recovers.
-      - name: Choose tonight's slice
-        id: slice
-        # The dispatch input arrives as an environment variable rather than
-        # being pasted into the script. `${{ }}` is substituted before bash sees
-        # the line, so an input containing a quote or a semicolon would be
-        # running as part of this step rather than being read by it.
-        env:
-          SHARD: ${{ github.event.inputs.shard }}
-          EVENT: ${{ github.event_name }}
-        run: |
-          if [ -n "$SHARD" ]; then
-            # Checked, not trusted. The value ends up inside a command line, and
-            # a typo should fail here with a readable message rather than
-            # further down as a scraper argument nobody recognises.
-            case "$SHARD" in
-              [1-9]/[1-9]|[1-9]/[1-9][0-9]|[1-9][0-9]/[1-9][0-9]) : ;;
-              *) echo "shard must look like 1/14, got: $SHARD" >&2; exit 1 ;;
-            esac
-            echo "arg=--shard $SHARD" >> "$GITHUB_OUTPUT"
-          elif [ "$EVENT" != "schedule" ]; then
-            # A blank shard on a manual run means "the whole shop", and the
-            # whole shop does not fit. Refusing here costs a second; the
-            # alternative is five and a half hours of polite fetching thrown
-            # away by the job timeout, landing in exactly the state a slice
-            # would have reached -- except with a run row left `running` for
-            # the reaper to tidy up twelve hours later.
-            echo "a full Carrefour run does not fit in a GitHub job." >&2
-            echo "85,194 pages at one request a second is ~24h; the ceiling is 6h." >&2
-            echo "Pass a slice, e.g. shard=1/5, or run it somewhere without the ceiling." >&2
-            exit 1
-          else
-            # +1 because --shard is one-based: a person counting nights starts
-            # at one, and 0/14 is not a slice.
-            SLICE=$(( $(date -u +%s) / 86400 % 14 + 1 ))
-            echo "tonight: slice $SLICE of 14"
-            echo "arg=--shard $SLICE/14" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Scrape carrefour
-        env:
-          CATALOG_SUPABASE_URL: ${{ secrets.CATALOG_SUPABASE_URL }}
-          CATALOG_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CATALOG_SUPABASE_SERVICE_ROLE_KEY }}
-          SLICE: ${{ steps.slice.outputs.arg }}
-        # No `|| true`. A sliced run closes its run row as `partial` and exits
-        # ZERO, because being one fifth of a shop is the expected outcome here
-        # and a step that went red nightly would train everybody to ignore red.
-        # Anything that does fail -- a circuit opening, bad credentials, the
-        # shop going quiet -- still exits non-zero and still turns this red,
-        # which is the whole point of not swallowing it.
-        # $SLICE unquoted on purpose: it is either empty or the two words
-        # `--shard 1/5`, and quoting it would hand the scraper one argument that
-        # is an empty string when there is no slice.
-        run: npm run scrape -- carrefour $SLICE
+  # Which also gives it back the thing slicing had taken away: a run that has
+  # seen the whole shop is the only kind allowed to mark anything as no longer
+  # sold, and no slice ever qualified. The scraper checks its own coverage
+  # against the sitemap every night and refuses to conclude anything if the
+  # departments accounted for less than 95% of it.
