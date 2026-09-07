@@ -120,7 +120,7 @@ begin
       end if;
 
       -- ── resolve the product ────────────────────────────────────────────────
-      -- Priority order, and nothing below it. See docs/adding-a-retailer.md.
+      -- Priority order, and nothing below it.
       v_product_id := null;
       v_by_gtin    := null;
       v_by_listing := null;

@@ -10,7 +10,7 @@
 // cookie replay, no CAPTCHA handling and no authentication. Those are the tools
 // for getting past somebody who has said no, and a shop that has said no has
 // said no. When a retailer cannot be read politely it is marked unimplemented
-// and the reason goes in docs/retailers.md.
+// and the reason is recorded on its registry entry.
 //
 // The circuit breaker and the per-attempt AbortController are carried over from
 // the previous catalog's Open Food Facts adapter, which is the one piece of that
@@ -242,17 +242,6 @@ export class HttpClient {
       this.hosts.set(host, state)
     }
     return state
-  }
-}
-
-/** JSON, with the parse failure reported as what it is rather than as a crash. */
-export async function getJson<T>(client: HttpClient, url: string): Promise<T | null> {
-  const response = await client.get(url)
-  if (!response.ok) return null
-  try {
-    return JSON.parse(response.body) as T
-  } catch {
-    return null
   }
 }
 
