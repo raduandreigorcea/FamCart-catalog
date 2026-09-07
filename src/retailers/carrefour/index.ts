@@ -28,7 +28,8 @@
 import type { RetailerProduct, RetailerScraper, ScrapeContext, Market, Category } from '../../core/types.ts'
 import { HttpClient } from '../../core/http.ts'
 import { fetchRobots, isAllowed } from '../../core/robots.ts'
-import { crawlProductPages } from '../../core/pageCrawl.ts'
+import { collectSitemapEntries } from '../../core/pageCrawl.ts'
+import { crawlDepartments } from './departments.ts'
 import { isAvailable } from '../../core/jsonld.ts'
 import type { JsonLdProduct } from '../../core/jsonld.ts'
 import { parseQuantity, validGtin, httpsUrl, usableBrand } from '../../core/normalize.ts'
@@ -130,15 +131,90 @@ export class CarrefourScraper implements RetailerScraper {
       throw new Error('carrefour robots.txt disallows product pages; refusing to crawl')
     }
 
-    yield* crawlProductPages({
-      retailer: this.retailer,
-      http,
-      ctx,
-      sitemapUrls: [SITEMAP],
-      supportsIncremental: true,
-      urlFilter: (url) => url.includes('/produse/'),
-      build: (product, url) => buildProduct(product, url),
+    // THE DEPARTMENTS, NOT THE PRODUCTS. The same sitemap holds both: 85,119
+    // /produse/ pages and 3,243 department pages. Reading the departments gets
+    // twenty-four products per request instead of one, which is the difference
+    // between forty-five hours and about two -- so the whole shop fits in a
+    // single nightly job, and a run that has seen the whole shop is the only
+    // kind allowed to mark anything as no longer sold.
+    //
+    // buildProduct() and the product-page parser stay, and stay tested. They are
+    // the fallback if the analytics payload ever goes, and they are what the
+    // fixtures pin the JSON-LD reading against.
+    const entries = await collectSitemapEntries(http, ctx, [SITEMAP])
+    const departments = entries
+      .map((entry) => entry.loc)
+      .filter((loc) => loc.startsWith(ORIGIN) && !loc.includes('/produse/'))
+      // Longest first, so the specific leaves are read before the parents that
+      // contain them. Same products either way -- they are deduplicated -- but
+      // this way a product's category comes from the narrowest department that
+      // claims it rather than from whichever happened to be crawled first.
+      .sort((a, b) => b.length - a.length)
+
+    if (departments.length === 0) {
+      // The sitemap answered and held no departments at all. Not an empty shop:
+      // something changed. Saying so stops the run concluding anything.
+      ctx.reportIncomplete?.('carrefour: the sitemap listed no department pages')
+      return
+    }
+
+    ctx.log.info('carrefour: departments read', {
+      departments: departments.length,
+      productUrlsIgnored: entries.length - departments.length,
     })
+
+    // THE CRAWL CHECKS ITS OWN COVERAGE, and this is the part that earns it the
+    // right to sweep.
+    //
+    // Reading departments is an indirect route to the products: a product that
+    // sits in no department, or in one the sitemap forgot, is simply never seen.
+    // On the product-page path that could not happen -- the list of products WAS
+    // the list of products. Here it can, and "did not see it" is what the sweep
+    // reads as "no longer sold". The first completed run would have marked every
+    // missed product gone, with the sanity floor no help at all, because a floor
+    // compares against a previous completed run and there has never been one.
+    //
+    // So the sitemap's own product list is kept as the yardstick, and the run
+    // reports incomplete unless the departments accounted for nearly all of it.
+    // Checked every night rather than proved once by hand: coverage is not a
+    // property of the code, it is a property of how the shop is arranged today.
+    const sitemapIds = new Set<string>()
+    for (const entry of entries) {
+      const match = /-(\d{5,})\/?$/.exec(entry.loc.replace(/\?.*$/, ''))
+      if (entry.loc.includes('/produse/') && match) sitemapIds.add(match[1])
+    }
+
+    const counters = { departments: 0, pages: 0, unreadable: 0, emitted: 0 }
+    const seen = new Set<string>()
+    try {
+      for await (const product of crawlDepartments({ http, ctx, departments, counters })) {
+        seen.add(product.externalId)
+        yield product
+      }
+    } finally {
+      ctx.log.info('carrefour: crawl finished', { ...counters })
+    }
+
+    if (sitemapIds.size > 0 && !ctx.limit) {
+      let covered = 0
+      for (const id of sitemapIds) if (seen.has(id)) covered++
+      const ratio = covered / sitemapIds.size
+      ctx.log.info('carrefour: coverage', {
+        sitemapProducts: sitemapIds.size,
+        seen: covered,
+        percent: Math.round(ratio * 1000) / 10,
+      })
+      // Nineteen in twenty. Below that, the departments are not describing the
+      // same shop the sitemap is, and whatever the reason -- a reorganised
+      // aisle, a department that failed to load, a payload that moved -- the run
+      // has no standing to declare the difference delisted.
+      if (ratio < 0.95) {
+        ctx.reportIncomplete?.(
+          `carrefour: departments covered ${covered} of ${sitemapIds.size} sitemap products ` +
+            `(${Math.round(ratio * 100)}%), below the 95% needed to conclude anything about the rest`,
+        )
+      }
+    }
   }
 }
 

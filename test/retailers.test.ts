@@ -259,100 +259,104 @@ describe('carrefour', () => {
     expect(carrefourId('https://carrefour.ro/produse/no-digits/', null)).toBeNull()
   })
 
-  it('skips the category sitemap and fetches only product pages', async () => {
-    const fetchImpl = fixtureFetch([
-      { match: '/robots.txt', file: 'carrefour/robots.txt' },
-      { match: 'sitemap.xml', file: 'carrefour/sitemap-index.xml' },
-      { match: 'sitemap_001', body: '<urlset><url><loc>https://carrefour.ro/bacanie-carrefour/</loc></url></urlset>' },
-      { match: 'sitemap_002', file: 'carrefour/sitemap-products.xml' },
-      { match: '/produse/', file: 'carrefour/product-instock.html.gz' },
-    ])
-    const log = testLogger()
-    const products = await collect(
-      new CarrefourScraper().discoverProducts({ log, fetchImpl, limit: 2, minIntervalMs: 0 }),
-      10,
-    )
-    expect(products.length).toBe(2)
-    expect(callsOf(fetchImpl).some((u) => u.includes('/bacanie-carrefour/'))).toBe(false)
-  })
-
-  // ─── slices ───────────────────────────────────────────────────────────────
-  // 85,000 product pages at one request a second is a day, and a CI job gets
-  // six hours. The way out is five nights, not five parallel jobs -- the
-  // ceiling is what the shop is asked to put up with, not what a machine can
-  // do.
+  // ─── departments, not products ────────────────────────────────────────────
+  // The crawl reads department listings rather than product pages: 24 products
+  // per request instead of one, which is the difference between forty-five
+  // hours and about two, and is what lets the whole shop fit in one nightly job.
   //
-  // Which makes the property below the only one that matters: the slices have
-  // to PARTITION the sitemap. Overlap means a page fetched twice a week for
-  // nothing; a gap means products nobody ever looks at again, silently, and
-  // there is no error anywhere to say which.
-  describe('slices', () => {
+  // The old path fetched every /produse/ URL in the sitemap. These pin the
+  // inversion, because getting it half-done -- reading departments AND products
+  // -- would be slower than either and nothing would fail.
+  describe('departments', () => {
     const routes = [
       { match: '/robots.txt', file: 'carrefour/robots.txt' },
       { match: 'sitemap.xml', file: 'carrefour/sitemap-index.xml' },
-      { match: 'sitemap_001', body: '<urlset></urlset>' },
+      {
+        match: 'sitemap_001',
+        body:
+          '<urlset><url><loc>https://carrefour.ro/bacanie-carrefour/</loc></url>' +
+          '<url><loc>https://carrefour.ro/tex/femei/</loc></url></urlset>',
+      },
       { match: 'sitemap_002', file: 'carrefour/sitemap-products.xml' },
+      { match: '?p=', file: 'carrefour/listing-single.html.gz' },
+      { match: '/bacanie-carrefour/', file: 'carrefour/listing-paged.html.gz' },
+      { match: '/tex/femei/', file: 'carrefour/listing-single.html.gz' },
       { match: '/produse/', file: 'carrefour/product-instock.html.gz' },
     ]
 
-    /** The product pages one slice actually fetched. */
-    async function pagesOf(shard?: { index: number; of: number }) {
+    async function run(extra: Record<string, unknown> = {}) {
       const fetchImpl = fixtureFetch(routes)
-      await collect(
+      const products = await collect(
         new CarrefourScraper().discoverProducts({
           log: testLogger(),
           fetchImpl,
           minIntervalMs: 0,
-          shard,
+          ...extra,
         }),
-        200,
+        500,
       )
-      return callsOf(fetchImpl).filter((u) => u.includes('/produse/'))
+      return { products, calls: callsOf(fetchImpl) }
     }
 
-    it('covers every page exactly once across the set', async () => {
-      const whole = await pagesOf()
-      const slices = await Promise.all(
-        [0, 1, 2, 3, 4].map((index) => pagesOf({ index, of: 5 })),
-      )
-      const together = slices.flat()
-      expect(together.slice().sort()).toEqual(whole.slice().sort())
-      expect(new Set(together).size).toBe(together.length)
+    it('reads department pages and never touches a product page', async () => {
+      const { products, calls } = await run()
+      expect(products.length).toBeGreaterThan(0)
+      expect(calls.some((u) => u.includes('/produse/'))).toBe(false)
+      expect(calls.some((u) => u.includes('/bacanie-carrefour/'))).toBe(true)
     })
 
-    it('splits the work roughly evenly', async () => {
-      const sizes = []
-      for (const index of [0, 1, 2, 3, 4]) sizes.push((await pagesOf({ index, of: 5 })).length)
-      // 50 URLs, five slices. Positional slicing cannot be lumpier than one.
-      expect(Math.max(...sizes) - Math.min(...sizes)).toBeLessThanOrEqual(1)
+    it('gets many products from one request, which is the whole point', async () => {
+      const { products, calls } = await run()
+      const listingCalls = calls.filter((u) => !u.includes('sitemap') && !u.includes('robots'))
+      expect(products.length).toBeGreaterThan(listingCalls.length)
     })
 
-    it('gives the whole shop to a set of one', async () => {
-      expect((await pagesOf({ index: 0, of: 1 })).length).toBe((await pagesOf()).length)
+    it('yields each product once, however many departments claim it', async () => {
+      // A product sits in a leaf and in every parent above it, so the same
+      // listing arrives repeatedly. The importer would cope, but products_valid
+      // is what the sanity floor and the dashboard delta are measured on -- a
+      // count inflated by duplicates would make a shrinking shop look healthy.
+      const { products } = await run()
+      const ids = products.map((p) => p.externalId)
+      expect(new Set(ids).size).toBe(ids.length)
     })
 
-    it('LEAVES THE TRUNCATION CHANNEL ALONE', async () => {
-      // A slice has plainly not seen the shop, and it still must not say so
-      // through reportIncomplete. That channel is for a crawl cut short by
-      // something -- a circuit opening, a host going quiet -- and the CLI keeps
-      // only the FIRST reason it is handed. A slice announcing itself at the
-      // top of every run would therefore mask a real truncation later in the
-      // same run, which is the single thing that channel exists to surface.
+    it('carries a category, which the product page never could', async () => {
+      const { products } = await run()
+      expect(products.some((p) => p.category !== null)).toBe(true)
+    })
+
+    it('REFUSES TO CONCLUDE ANYTHING when the departments miss the shop', async () => {
+      // The load-bearing one. Departments are an indirect route to the products:
+      // one that sits in no department is never seen, and "did not see it" is
+      // what a sweep reads as "no longer sold". The sanity floor is no help --
+      // it compares against a previous COMPLETED run, and on this path there has
+      // never been one, so the first would have marked every missed product gone.
       //
-      // The slice is a fact the CLI already knows from its own arguments, and
-      // that is where it closes the run as partial.
+      // Here the fixtures' departments hold 24-ish products while the sitemap
+      // lists fifty, so coverage is far under the bar and the run says so.
       const reasons: string[] = []
-      await collect(
-        new CarrefourScraper().discoverProducts({
-          log: testLogger(),
-          fetchImpl: fixtureFetch(routes),
-          minIntervalMs: 0,
-          shard: { index: 1, of: 5 },
-          reportIncomplete: (reason) => reasons.push(reason),
-        }),
-        200,
-      )
-      expect(reasons).toEqual([])
+      await run({ reportIncomplete: (reason: string) => reasons.push(reason) })
+      expect(reasons.length).toBeGreaterThan(0)
+      expect(reasons.join(' ')).toContain('covered')
+    })
+
+    it('says nothing about coverage on a deliberately limited run', async () => {
+      // --limit stops early by design, so measuring its coverage would report a
+      // shortfall that is the operator's doing rather than the shop's.
+      const reasons: string[] = []
+      await run({ limit: 5, reportIncomplete: (reason: string) => reasons.push(reason) })
+      expect(reasons.join(' ')).not.toContain('covered')
+    })
+
+    it('stops a department that ignores ?p instead of paging forever', async () => {
+      // A small department serves page one again for every ?p, so "fewer than a
+      // full page means the end" is wrong in both directions: a leaf would look
+      // finished immediately and a full department would loop until the job died.
+      // The stop rule is identity -- nothing new means nothing further.
+      const { calls } = await run()
+      const texPages = calls.filter((u) => u.includes('/tex/femei/'))
+      expect(texPages.length).toBeLessThan(5)
     })
   })
 })

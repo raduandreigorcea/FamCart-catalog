@@ -157,35 +157,24 @@ Two secrets on this repository, the same pair `.env.scripts` holds:
 |---|---|---|---|
 | Lidl | nightly, whole shop | `completed` | yes |
 | Auchan | nightly, whole shop | `completed` | yes |
-| Carrefour | nightly, one fourteenth each | `partial` | **no** |
+| Carrefour | nightly, whole shop | `completed` | yes |
 
-**Carrefour is sliced because of politeness, not machine time.** 85,000 product
-pages is about forty-five hours of polite fetching and a job gets six -- but
-running the slices at once would simply mean several requests a second at one
-shop. So they run on different nights, the shop sees the trickle it always did,
-and the whole catalogue is covered every fortnight.
+**Carrefour is read through its DEPARTMENT pages, not its product pages.** A
+department listing carries twenty-four products in one request, in the analytics
+payload the page publishes for its own tracking, and it names the department --
+which a Carrefour product page never did. 85,119 product pages is about
+forty-five hours; 3,243 department pages is about two.
 
-Fourteen is measured, not chosen. A live crawl came back at 2.89 seconds a page:
-the shop takes about 1.9 to hand over a 300 KB page, and the politeness gap used
-to be added on top of that rather than overlapped with it. It is stamped from
-the start of a request now, so the cadence is `max(1s, response time)` -- which
-is what "at most one request a second" always meant, and asks no more of the
-shop than the old code did on its fastest page.
+That is what lets it be crawled whole, and a run that has seen the whole shop is
+the only kind allowed to mark anything as no longer sold. It used to be cut into
+nightly slices, none of which ever qualified.
 
-The cost, stated plainly: **nothing at Carrefour is ever marked unavailable.** A
-delisted product goes stale rather than absent, and `last_seen_at` is what tells
-those apart.
-
-There is no full run available to put that right. A hosted job is capped at six
-hours and reading all 85,000 pages politely is about twenty-four, so the
-workflow refuses a blank shard rather than spending five and a half hours
-arriving at the same place. `--since` does not rescue it: an incremental run
-skips the pages the shop has not touched, and a page not fetched is a listing
-not touched, which the sweep would read as absent.
-
-The way out, when it matters enough, is that the sitemap is the shop's own
-complete statement of what exists and it arrives in one request -- a "seen these
-ids" call against it would sweep without crawling anything.
+The trade is stability. JSON-LD on a product page is there because Google
+requires it for rich results; an analytics blob has no such promise and can go in
+a deploy. The failure is loud rather than quiet: an unreadable payload yields
+nothing, the count collapses, and the sanity floor refuses to sweep on it. The
+crawl also measures its own coverage against the sitemap every night and refuses
+to conclude anything if the departments accounted for less than 95% of it.
 
 CI still never scrapes. This is a separate workflow; `ci.yml` runs off committed
 fixtures so a shop being slow or redesigned cannot turn a build red.
