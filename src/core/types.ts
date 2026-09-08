@@ -94,6 +94,19 @@ export interface ScrapeContext {
    * sweep -- the same rule --limit follows, for the same reason.
    */
   shard?: { index: number; of: number }
+  /**
+   * Say how much of the shop's OWN INDEX the crawl accounted for.
+   *
+   * The count alone cannot tell a shop that shrank from a scraper that broke --
+   * both report half of last week. Where the count came from can: a crawl that
+   * read every URL the shop advertised is authoritative about the shop's size,
+   * whatever the previous run said, and one that read half of them is not.
+   *
+   * Reported as a ratio so the caller decides the bar. A scraper with no index
+   * to measure against simply never calls this, and the run falls back to the
+   * delta floor, which is where everything was before.
+   */
+  reportCoverage?: (seen: number, advertised: number) => void
   /** Somewhere to say what is happening. */
   log: Logger
   /**
