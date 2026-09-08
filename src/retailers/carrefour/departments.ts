@@ -12,8 +12,17 @@
 // page means the end" is wrong -- a leaf with thirteen products would look
 // finished on page one and a full department would loop until the job died.
 //
-// The stop rule is therefore about identity, not count: stop when a page shows
-// nothing the previous pages did not already show.
+// THE STOP RULE IS ABOUT THE DEPARTMENT REPEATING ITSELF, and the first version
+// got this wrong in a way that cost half the shop. It stopped as soon as a page
+// held nothing GLOBALLY new -- but departments nest, and the leaves are read
+// first, so a parent's page one is entirely products its own leaves already
+// yielded. Every parent stopped on page one and never reached the pages holding
+// the products that sit in no leaf. A live run covered 46.7% of the shop:
+// 39,691 products from 5,438 pages, 7.3 per page against a page size of 24.
+// The pages were full; the crawl was refusing to turn them.
+//
+// So the question is "did the shop serve me this same page again", which is
+// what a department that ignores ?p does -- never "have I seen these before".
 
 import type { RetailerProduct, ScrapeContext } from '../../core/types.ts'
 import type { HttpClient } from '../../core/http.ts'
@@ -21,6 +30,23 @@ import { parseListingPage } from './listing.ts'
 
 /** Guards against a department that pages forever. No real one comes near it. */
 const MAX_PAGES = 400
+
+/**
+ * Has the shop just served the same page again?
+ *
+ * The only two ways a department is finished: it hands back nothing, or it
+ * hands back exactly what it handed back last time -- which is what one too
+ * small to paginate does with every ?p it is given.
+ *
+ * Deliberately NOT "are these products already known". They usually are: a
+ * product sits in a leaf and in every parent above it, and the leaves are read
+ * first. Treating that as the end stopped every parent on page one.
+ */
+export function pageRepeats(previous: string[] | null, current: string[]): boolean {
+  if (current.length === 0) return true
+  if (previous === null || previous.length !== current.length) return false
+  return current.every((id, i) => previous[i] === id)
+}
 
 export interface DepartmentCrawlCounters {
   [key: string]: number
@@ -53,6 +79,7 @@ export async function* crawlDepartments(options: {
     if (ctx.signal?.aborted) return
     counters.departments++
 
+    let previous: string[] | null = null
     for (let page = 1; page <= MAX_PAGES; page++) {
       if (ctx.signal?.aborted) return
 
@@ -86,21 +113,21 @@ export async function* crawlDepartments(options: {
         break
       }
 
-      let fresh = 0
+      const ids = products.map((product) => product.externalId)
+
       for (const product of products) {
+        // Deduplicated for OUTPUT only. Whether to turn another page is decided
+        // below, from the page itself -- conflating the two is what stopped
+        // every parent department on its first page.
         if (seen.has(product.externalId)) continue
         seen.add(product.externalId)
-        fresh++
         counters.emitted++
         yield product
         if (ctx.limit && counters.emitted >= ctx.limit) return
       }
 
-      // THE STOP RULE. Nothing new on this page means either the department has
-      // run out or it is serving page one again, and both mean the same thing:
-      // there is nothing further here. Counting products instead would loop a
-      // small department until the job timed out.
-      if (fresh === 0) break
+      if (pageRepeats(previous, ids)) break
+      previous = ids
 
       if (counters.pages % 250 === 0) {
         ctx.log.info('carrefour: crawling departments', { ...counters })

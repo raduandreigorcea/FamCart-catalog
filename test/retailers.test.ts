@@ -12,6 +12,7 @@ import type { VtexProduct } from '../src/retailers/auchan/vtex.ts'
 import { AuchanScraper } from '../src/retailers/auchan/index.ts'
 import { buildProduct as buildCarrefour, externalIdFrom as carrefourId } from '../src/retailers/carrefour/index.ts'
 import { CarrefourScraper } from '../src/retailers/carrefour/index.ts'
+import { parseListingPage } from '../src/retailers/carrefour/listing.ts'
 import { buildProduct as buildLidl, externalIdFrom as lidlId } from '../src/retailers/lidl/index.ts'
 import { LidlScraper } from '../src/retailers/lidl/index.ts'
 import { extractJsonLd, findProduct, readProduct } from '../src/core/jsonld.ts'
@@ -298,6 +299,33 @@ describe('carrefour', () => {
       return { products, calls: callsOf(fetchImpl) }
     }
 
+    it('does not mistake a root-level product page for a department', async () => {
+      // Carrefour publishes products at the root as well as under /produse/:
+      // carrefour.ro/prajitor-de-paine-...-19-41503994/ is a toaster, not an
+      // aisle. Asking whether the path contains /produse/ let thousands of them
+      // through to be crawled as departments, each one then counted as a page
+      // the crawler could not read. A department is a URL that does NOT end in
+      // a product id.
+      const fetchImpl = fixtureFetch([
+        ...routes,
+        {
+          match: 'sitemap_001',
+          body:
+            '<urlset><url><loc>https://carrefour.ro/bacanie-carrefour/</loc></url>' +
+            '<url><loc>https://carrefour.ro/prajitor-de-paine-tefal-19-41503994/</loc></url></urlset>',
+        },
+      ])
+      await collect(
+        new CarrefourScraper().discoverProducts({
+          log: testLogger(),
+          fetchImpl,
+          minIntervalMs: 0,
+        }),
+        500,
+      )
+      expect(callsOf(fetchImpl).some((u) => u.includes('prajitor-de-paine'))).toBe(false)
+    })
+
     it('reads department pages and never touches a product page', async () => {
       const { products, calls } = await run()
       expect(products.length).toBeGreaterThan(0)
@@ -309,6 +337,48 @@ describe('carrefour', () => {
       const { products, calls } = await run()
       const listingCalls = calls.filter((u) => !u.includes('sitemap') && !u.includes('robots'))
       expect(products.length).toBeGreaterThan(listingCalls.length)
+    })
+
+    it('KEEPS TURNING A PARENT PAST PRODUCTS ITS LEAVES ALREADY GAVE', async () => {
+      // The bug that cost half the shop, pinned end to end rather than as a
+      // unit. Departments nest and the leaves are read first, so a parent's
+      // page one is entirely products already yielded. Stopping there -- which
+      // "nothing globally new" does -- means never reaching page two, where the
+      // products that sit in no leaf live. A live run covered 46.7%.
+      //
+      // Here the leaf and the parent's page one serve the SAME fixture, and the
+      // parent's page two serves a different one. A crawl that stops on
+      // familiarity never sees the second fixture's products at all.
+      const fetchImpl = fixtureFetch([
+        { match: '/robots.txt', file: 'carrefour/robots.txt' },
+        { match: 'sitemap.xml', file: 'carrefour/sitemap-index.xml' },
+        {
+          match: 'sitemap_001',
+          body:
+            '<urlset><url><loc>https://carrefour.ro/aisle/</loc></url>' +
+            '<url><loc>https://carrefour.ro/aisle/leaf/</loc></url></urlset>',
+        },
+        { match: 'sitemap_002', body: '<urlset></urlset>' },
+        // Order matters: the more specific patterns first.
+        { match: '/aisle/leaf/', file: 'carrefour/listing-paged.html.gz' },
+        { match: '/aisle/?p=2', file: 'carrefour/listing-single.html.gz' },
+        { match: '/aisle/?p=', body: '<html></html>', status: 404 },
+        { match: '/aisle/', file: 'carrefour/listing-paged.html.gz' },
+      ])
+      const products = await collect(
+        new CarrefourScraper().discoverProducts({
+          log: testLogger(),
+          fetchImpl,
+          minIntervalMs: 0,
+        }),
+        500,
+      )
+      const singleOnly = parseListingPage(readFixture('carrefour/listing-single.html.gz'))!
+      const got = new Set(products.map((p) => p.externalId))
+      expect(
+        singleOnly.some((p) => got.has(p.externalId)),
+        'the parent was turned past its first page',
+      ).toBe(true)
     })
 
     it('yields each product once, however many departments claim it', async () => {
