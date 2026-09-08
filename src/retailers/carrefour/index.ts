@@ -142,9 +142,16 @@ export class CarrefourScraper implements RetailerScraper {
     // the fallback if the analytics payload ever goes, and they are what the
     // fixtures pin the JSON-LD reading against.
     const entries = await collectSitemapEntries(http, ctx, [SITEMAP])
+
+    // A DEPARTMENT IS A URL THAT DOES NOT END IN A PRODUCT ID. The first version
+    // asked whether the path contained `/produse/`, and Carrefour also publishes
+    // product pages at the root -- carrefour.ro/prajitor-de-paine-...-19-41503994/
+    // is a toaster, not an aisle. Those were crawled as departments, found to
+    // have no listing payload, and counted as pages we could not read.
+    const isProduct = (loc: string): boolean => /-\d{5,}\/?$/.test(loc.replace(/\?.*$/, ''))
     const departments = entries
       .map((entry) => entry.loc)
-      .filter((loc) => loc.startsWith(ORIGIN) && !loc.includes('/produse/'))
+      .filter((loc) => loc.startsWith(ORIGIN) && !isProduct(loc))
       // Longest first, so the specific leaves are read before the parents that
       // contain them. Same products either way -- they are deduplicated -- but
       // this way a product's category comes from the narrowest department that
@@ -180,8 +187,13 @@ export class CarrefourScraper implements RetailerScraper {
     // property of the code, it is a property of how the shop is arranged today.
     const sitemapIds = new Set<string>()
     for (const entry of entries) {
+      // Every product the sitemap names, wherever it sits -- the same rule the
+      // department filter uses, so the two can never disagree about what a
+      // product is. Asking for `/produse/` here would have left the root-level
+      // ones out of the yardstick as well as out of the crawl, and coverage
+      // would have looked better than it was.
       const match = /-(\d{5,})\/?$/.exec(entry.loc.replace(/\?.*$/, ''))
-      if (entry.loc.includes('/produse/') && match) sitemapIds.add(match[1])
+      if (match) sitemapIds.add(match[1])
     }
 
     const counters = { departments: 0, pages: 0, unreadable: 0, emitted: 0 }
