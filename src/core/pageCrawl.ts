@@ -219,4 +219,12 @@ export async function* crawlProductPages(
   }
 
   ctx.log.info(`${retailer}: crawl finished`, { ...counters, emitted })
+
+  // What the shop advertised, against what we actually read. A sliced or
+  // limited run is deliberately partial and has nothing to say here.
+  if (!ctx.shard && !ctx.limit) {
+    // Delisted pages are part of the index we accounted for: a 404 is the shop
+    // answering, and the sweep is exactly what should follow it.
+    ctx.reportCoverage?.(counters.fetched + counters.delisted, wanted.length)
+  }
 }
