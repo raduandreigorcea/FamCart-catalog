@@ -154,3 +154,45 @@ describe('the shop department, folded onto ours', () => {
     expect(categoryFromLabel('')).toBeNull()
   })
 })
+
+// ─── the stop rule ───────────────────────────────────────────────────────────
+// A live run covered 46.7% of the shop and the coverage check refused to let it
+// sweep, which is what it is for. The cause was here: the crawl stopped a
+// department as soon as a page held nothing GLOBALLY new.
+//
+// Departments nest, and the leaves are read first, so a parent's page one is
+// entirely products its own leaves already yielded -- and the parent stopped
+// there, never reaching page two, where the products that sit in no leaf live.
+// 39,691 products from 5,438 pages is 7.3 per page against a page size of 24;
+// the pages were full, the crawl was just refusing to turn them.
+//
+// The rule has to be about the DEPARTMENT repeating itself, not about novelty:
+// a small department ignores ?p and serves page one forever, and that -- not
+// "I have seen these before" -- is the thing to stop on.
+import { pageRepeats } from '../src/retailers/carrefour/departments.ts'
+
+describe('when to stop turning the pages of a department', () => {
+  it('stops when the shop serves the same page again', () => {
+    // A department with thirteen products ignores ?p entirely.
+    expect(pageRepeats(['1', '2', '3'], ['1', '2', '3'])).toBe(true)
+  })
+
+  it('stops on an empty page', () => {
+    expect(pageRepeats(['1', '2'], [])).toBe(true)
+  })
+
+  it('KEEPS GOING when the page is full of products seen elsewhere', () => {
+    // The regression. Every id here has been seen -- in a leaf department --
+    // but this page is not the previous page, so the department has more to
+    // give and stopping would lose whatever is on page two.
+    expect(pageRepeats(['1', '2', '3'], ['4', '5', '6'])).toBe(false)
+  })
+
+  it('keeps going when the page has merely shifted', () => {
+    expect(pageRepeats(['1', '2', '3'], ['2', '3', '4'])).toBe(false)
+  })
+
+  it('treats the first page as never a repeat', () => {
+    expect(pageRepeats(null, ['1', '2'])).toBe(false)
+  })
+})
