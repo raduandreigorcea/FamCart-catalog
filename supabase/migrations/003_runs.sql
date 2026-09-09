@@ -79,42 +79,18 @@ revoke all on public.catalog_scrape_runs from anon, authenticated;
 grant select on public.catalog_scrape_runs to authenticated;
 
 -- ─── open ────────────────────────────────────────────────────────────────────
--- started_at is the run's watermark. Every listing the run touches is stamped
--- with it, so "not seen in this run" is a plain timestamp comparison and needs
--- no per-run join table.
+-- catalog_run_open LIVES IN 010, ALONE, and it used to be defined here as well.
 --
--- Deliberately does NOT refuse to open when another run for the same retailer is
--- still 'running'. A crashed process leaves its row running forever, and a lock
--- that only a crashed process can release is a lock that eventually stops all
--- scraping. Concurrency is controlled by whoever schedules the runs; the worst a
--- genuine overlap costs is that the later run's watermark wins, and the sweep is
--- floor-guarded anyway.
-create or replace function public.catalog_run_open(p_retailer text)
-returns uuid
-language plpgsql
-security definer
-set search_path = public
-as $fn$
-declare
-  v_retailer_id uuid;
-  v_run_id      uuid;
-begin
-  select id into v_retailer_id from public.catalog_retailers where slug = p_retailer;
-  if v_retailer_id is null then
-    raise exception 'unknown retailer: %', p_retailer using errcode = 'P0001', detail = 'unknown_retailer';
-  end if;
-
-  insert into public.catalog_scrape_runs (retailer_id, status)
-  values (v_retailer_id, 'running')
-  returning id into v_run_id;
-
-  return v_run_id;
-end;
-$fn$;
-
-comment on function public.catalog_run_open(text) is
-  'Start a scrape run and return its id. started_at becomes the run watermark.';
-
+-- Two files restating one function is not a duplicate, it is a race: whichever
+-- ran last is what the database has. 007 replaced this one to wire the reap into
+-- it, and a later re-push of THIS file put the un-wired version back -- silently,
+-- because a function that still exists and still opens runs looks fine. Six
+-- Carrefour runs sat `running` for three days before anybody noticed the reap
+-- had stopped firing.
+--
+-- So there is now exactly one definition, and it is in the highest-numbered file
+-- that has ever held one. Re-pushing 003 or 007 can no longer undo it.
+--
 -- ─── progress ────────────────────────────────────────────────────────────────
 -- A heartbeat the CLI calls between batches, so a long Carrefour crawl is
 -- legible while it is happening rather than only once it ends. Counters are
@@ -324,13 +300,11 @@ comment on function public.catalog_run_complete(uuid, boolean) is
 
 -- Nothing here is callable from a browser. These are the scraper's functions and
 -- the scraper holds the service-role key.
-revoke all on function public.catalog_run_open(text) from public, anon, authenticated;
 revoke all on function public.catalog_run_progress(uuid, integer, integer, integer, integer, jsonb) from public, anon, authenticated;
 revoke all on function public.catalog_run_fail(uuid, text) from public, anon, authenticated;
 revoke all on function public.catalog_run_partial(uuid, text) from public, anon, authenticated;
 revoke all on function public.catalog_run_complete(uuid, boolean) from public, anon, authenticated;
 
-grant execute on function public.catalog_run_open(text) to service_role;
 grant execute on function public.catalog_run_progress(uuid, integer, integer, integer, integer, jsonb) to service_role;
 grant execute on function public.catalog_run_fail(uuid, text) to service_role;
 grant execute on function public.catalog_run_partial(uuid, text) to service_role;

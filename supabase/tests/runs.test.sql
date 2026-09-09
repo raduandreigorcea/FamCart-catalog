@@ -9,7 +9,9 @@
 -- property of the test, not of the schema: in production the runs are minutes or
 -- days apart and catalog_run_open's default is right.
 begin;
-select plan(42);
+-- 41: the coverage-authority block added six assertions to the thirty-five that
+-- were here, and the plan was bumped by seven.
+select plan(41);
 
 delete from public.catalog_scrape_runs;
 delete from public.catalog_listings;
@@ -212,13 +214,18 @@ select ok(not has_function_privilege('authenticated', 'public.catalog_run_partia
 -- said, so the delta floor does not apply to it.
 select public.catalog_run_open('lidl') as run_id \gset c1_
 update public.catalog_scrape_runs set started_at = now() - interval '4 hours' where id = :'c1_run_id';
+-- THREE, not two. The floor refuses a run that found LESS THAN half of the
+-- baseline, so one of two is exactly on the line and passes -- which made the
+-- next assertion test nothing at all. One of three is genuinely below it.
 select public.catalog_import_listings($j$[
   {"external_id":"L1","name":"Ciocolata Lidl 100g","brand":"Lidl","price":5.99,"currency":"RON",
    "quantity":100,"unit":"g","product_url":"https://www.lidl.ro/p/l1","available":true},
   {"external_id":"L2","name":"Cafea Lidl 250g","brand":"Lidl","price":15.99,"currency":"RON",
-   "quantity":250,"unit":"g","product_url":"https://www.lidl.ro/p/l2","available":true}
+   "quantity":250,"unit":"g","product_url":"https://www.lidl.ro/p/l2","available":true},
+  {"external_id":"L3","name":"Biscuiti Lidl 300g","brand":"Lidl","price":7.99,"currency":"RON",
+   "quantity":300,"unit":"g","product_url":"https://www.lidl.ro/p/l3","available":true}
 ]$j$::jsonb, 'lidl', :'c1_run_id'::uuid);
-select public.catalog_run_progress(:'c1_run_id'::uuid, 2, 2, 0, 0);
+select public.catalog_run_progress(:'c1_run_id'::uuid, 3, 3, 0, 0);
 select is(public.catalog_run_complete(:'c1_run_id'::uuid) ->> 'status', 'completed',
   'a first full run completes and becomes the baseline');
 
@@ -231,10 +238,10 @@ select public.catalog_import_listings($j$[
 ]$j$::jsonb, 'lidl', :'c2_run_id'::uuid);
 select public.catalog_run_progress(:'c2_run_id'::uuid, 1, 1, 0, 0);
 
--- Half of two is on the floor, so without the coverage claim this is partial.
+-- One of three is under the floor, so without the coverage claim this is partial.
 select is(
   public.catalog_run_complete(:'c2_run_id'::uuid, false) ->> 'status', 'partial',
-  'halving alone is still refused, which is the whole point of the floor');
+  'a collapse alone is still refused, which is the whole point of the floor');
 
 -- Same numbers, but the crawl says it read everything the shop advertised.
 select public.catalog_run_open('lidl') as run_id \gset c3_
@@ -260,7 +267,7 @@ select is(
   'a run that found NOTHING is refused however much it claims to have covered');
 select is((select count(*)::int from public.catalog_listings l
              join public.catalog_retailers r on r.id = l.retailer_id
-            where r.slug = 'lidl'), 2,
+            where r.slug = 'lidl'), 3,
   'and nothing was deleted by any of it -- gone from the shelf is not gone from the catalog');
 
 select * from finish();
