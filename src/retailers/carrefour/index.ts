@@ -216,6 +216,11 @@ export class CarrefourScraper implements RetailerScraper {
         seen: covered,
         percent: Math.round(ratio * 1000) / 10,
       })
+      // The same number the other scrapers report, through the same channel:
+      // what the shop advertised, against what we accounted for. High enough
+      // and this run is authoritative about the shop's size, whatever last
+      // week's count was.
+      ctx.reportCoverage?.(covered, sitemapIds.size)
       // Nineteen in twenty. Below that, the departments are not describing the
       // same shop the sitemap is, and whatever the reason -- a reorganised
       // aisle, a department that failed to load, a payload that moved -- the run

@@ -100,6 +100,13 @@ async function scrapeOne(
   // answering after a sixth of its catalog" and a run marked `completed`.
   let incomplete: string | null = null
 
+  // How much of the shop's own index the crawl accounted for. The delta floor
+  // cannot tell a shop that shrank from a scraper that broke -- both report half
+  // of last week -- and this is what can: a crawl that read everything the shop
+  // advertised is authoritative about the shop's size. Below the bar, or not
+  // reported at all, the run falls back to the floor.
+  let coverage: { seen: number; advertised: number } | null = null
+
   try {
     await run.open()
 
@@ -112,6 +119,9 @@ async function scrapeOne(
       signal: controller.signal,
       reportIncomplete: (reason) => {
         incomplete ??= reason
+      },
+      reportCoverage: (seen, advertised) => {
+        coverage = { seen, advertised }
       },
     })) {
       if (args.ndjson) process.stdout.write(JSON.stringify(product) + '\n')
@@ -173,7 +183,22 @@ async function scrapeOne(
       return true
     }
 
-    const verdict = await run.complete()
+    // Nineteen in twenty, the same bar the Carrefour crawl holds itself to. Not
+    // a round hundred: a handful of pages fail on any large crawl, and demanding
+    // perfection would mean the exemption never applied to the shops that need
+    // it most.
+    const covered = coverage as { seen: number; advertised: number } | null
+    const coveredIndex = covered !== null && covered.advertised > 0 && covered.seen / covered.advertised >= 0.95
+    if (covered !== null) {
+      log.info('index coverage', {
+        seen: covered.seen,
+        advertised: covered.advertised,
+        percent: Math.round((covered.seen / covered.advertised) * 1000) / 10,
+        authoritative: coveredIndex,
+      })
+    }
+
+    const verdict = await run.complete(coveredIndex)
     log.info('done', {
       retailer: scraper.retailer,
       durationMs: Date.now() - started,

@@ -167,12 +167,20 @@ export class ScrapeRun {
   private reportedRejected = 0
 
   /** Close as completed, letting the database decide whether to sweep. */
-  async complete(): Promise<Record<string, unknown> | null> {
+  /**
+   * @param coveredIndex the run accounted for essentially everything the shop
+   *   itself advertised, which makes it authoritative about the shop's size and
+   *   exempts it from the delta floor. See catalog_run_complete in 003.
+   */
+  async complete(coveredIndex = false): Promise<Record<string, unknown> | null> {
     await this.flush()
     if (this.dryRun || !this.runId) return null
     await this.heartbeat()
 
-    const { data, error } = await this.db.rpc('catalog_run_complete', { p_run_id: this.runId })
+    const { data, error } = await this.db.rpc('catalog_run_complete', {
+      p_run_id: this.runId,
+      p_covered_index: coveredIndex,
+    })
     if (error) throw new Error(`could not close the run: ${describe(error)}`)
     const verdict = (data ?? {}) as Record<string, unknown>
 
