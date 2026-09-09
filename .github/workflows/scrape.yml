@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       retailer:
-        description: 'Which shop (auchan, carrefour, lidl, all)'
+        description: 'Which shop (auchan, carrefour, lidl, mega-image, all)'
         required: true
         default: all
 
@@ -41,12 +41,15 @@ permissions:
   contents: read
 
 jobs:
-  # ─── all three, whole ───────────────────────────────────────────────────────
+  # ─── all four, whole ────────────────────────────────────────────────────────
   # Auchan is a paged API -- 50 products per call, so ~60,000 products is about
   # 1,200 requests. Lidl is 511 pages. Carrefour reads department listings at
-  # 24 products a request. All three crawl the whole shop, close as `completed`,
-  # and are therefore allowed to sweep -- which is the only path by which
-  # anything is ever marked as no longer sold.
+  # 24 products a request. Mega Image is 8,879 product pages, one request each,
+  # and is the only one of the four whose sitemap dates its entries -- so after
+  # the first full night it fetches what moved rather than all of them. All four
+  # crawl the whole shop, close as `completed`, and are therefore allowed to
+  # sweep -- which is the only path by which anything is ever marked as no longer
+  # sold.
   full:
     name: ${{ matrix.retailer }}
     runs-on: ubuntu-latest
@@ -59,10 +62,12 @@ jobs:
       max-parallel: 1
       fail-fast: false
       matrix:
-        retailer: [lidl, auchan, carrefour]
+        retailer: [lidl, mega-image, auchan, carrefour]
     # Generous rather than tight: a job killed by a timeout leaves its run row
-    # `running`, which the reaper in 007 has to clean up 12 hours later. The
-    # crawls themselves are ~10 minutes, ~40 and ~2 hours.
+    # `running`, which the reaper in 007 has to clean up 12 hours later -- and
+    # that reaper only runs when the NEXT run for some shop opens, so a stuck row
+    # sits on the dashboard until then. The crawls themselves are ~10 minutes,
+    # ~2.5 hours, ~40 minutes and ~2 hours.
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4

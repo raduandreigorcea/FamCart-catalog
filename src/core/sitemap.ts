@@ -18,6 +18,9 @@ export interface SitemapEntry {
 const LOC_RE = /<loc>\s*([\s\S]*?)\s*<\/loc>/gi
 const URL_BLOCK_RE = /<url>([\s\S]*?)<\/url>/gi
 const LASTMOD_RE = /<lastmod>\s*([\s\S]*?)\s*<\/lastmod>/i
+// The address Mega Image actually publishes. Its <loc> is present and EMPTY on
+// every one of 10,707 entries, with the real URL in the xhtml:link beside it.
+const ALTERNATE_RE = /<xhtml:link[^>]*\shref\s*=\s*["']([^"']+)["'][^>]*>/i
 
 /** The nested sitemaps in a <sitemapindex>. */
 export function parseSitemapIndex(xml: string): string[] {
@@ -37,11 +40,23 @@ export function parseUrlset(xml: string): SitemapEntry[] {
   const entries: SitemapEntry[] = []
   for (const block of matchAll(xml, URL_BLOCK_RE)) {
     const locMatch = /<loc>\s*([\s\S]*?)\s*<\/loc>/i.exec(block)
-    if (!locMatch) continue
+    // An EMPTY <loc> is not a missing one, and the difference matters. Mega
+    // Image writes <loc></loc> on every entry and puts the address in an
+    // xhtml:link; trusting <loc> there yields the right NUMBER of entries all
+    // pointing at nothing, which is the worst shape a bug can have -- the crawl
+    // fetches the origin ten thousand times and concludes the shop has no
+    // products. The alternate is a fallback rather than a preference, because
+    // where both exist the <loc> is the canonical one and the alternate is a
+    // translation.
+    const loc = locMatch ? decodeXml(locMatch[1]) : ''
+    const alternate = ALTERNATE_RE.exec(block)
+    const address = loc || (alternate ? decodeXml(alternate[1]) : '')
+    if (!address) continue
+
     const lastmodMatch = LASTMOD_RE.exec(block)
     const lastmod = lastmodMatch ? new Date(lastmodMatch[1]) : null
     entries.push({
-      loc: decodeXml(locMatch[1]),
+      loc: address,
       lastmod: lastmod && !Number.isNaN(lastmod.getTime()) ? lastmod : null,
     })
   }
