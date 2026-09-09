@@ -179,6 +179,28 @@ to conclude anything if the departments accounted for less than 95% of it.
 CI still never scrapes. This is a separate workflow; `ci.yml` runs off committed
 fixtures so a shop being slow or redesigned cannot turn a build red.
 
+## When a run may say a product is gone
+
+Only `catalog_run_complete()` sweeps, and it refuses twice: on a run that found
+nothing, and on a run that found less than half of what the last completed run
+found.
+
+**The second check cannot tell a shop that shrank from a scraper that broke** --
+both report half of last week. Blocking the sweep is right for the second and a
+permanent trap for the first: a `partial` run never becomes the baseline, so a
+shop that really shrank is measured against its old size forever. Lidl went from
+511 products to 251 and landed exactly there.
+
+What separates them is not the count but where it came from. Lidl's crawl read
+251 of the 251 URLs Lidl itself advertised, with nothing failing to parse; a
+broken scraper reads 251 of 511. So **a run that accounted for at least 95% of
+the shop's own index is authoritative about the shop's size**, whatever last
+week said, and the delta floor does not apply to it.
+
+A run that found nothing is still refused, however much it claims to have
+covered. And a sweep sets `available = false`, which the next run undoes --
+nothing is ever deleted.
+
 ## Credentials
 
 `.env.scripts`, at the app repo root or here:
