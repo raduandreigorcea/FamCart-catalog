@@ -147,6 +147,26 @@ describe('sitemaps', () => {
   it('does not mistake a urlset for an index', () => {
     expect(parseSitemapIndex(readFixture('lidl/sitemap-products.xml'))).toEqual([])
   })
+
+  // MEGA IMAGE SHIPS A BROKEN SITEMAP, and it is broken in a way that is easy to
+  // miss: every <loc> is present and EMPTY, with the real address in the
+  // xhtml:link beside it. A parser that trusts <loc> gets the right number of
+  // entries pointing nowhere, so the crawl fetches the origin ten thousand times
+  // and reports that no page held a product.
+  it('falls back to the alternate link when Mega Image ships an empty loc', () => {
+    const entries = parseUrlset(readFixture('mega-image/sitemap-products.xml'))
+    expect(entries.length).toBe(36)
+    expect(entries.every((e) => e.loc.startsWith('https://www.mega-image.ro/'))).toBe(true)
+    expect(entries.some((e) => /\/p\/\d+$/.test(e.loc))).toBe(true)
+  })
+
+  it('still prefers a real loc over an alternate that disagrees with it', () => {
+    const xml = `<urlset><url>
+      <loc>https://x.test/canonical</loc>
+      <xhtml:link rel="alternate" href="https://x.test/translated"/>
+    </url></urlset>`
+    expect(parseUrlset(xml)[0].loc).toBe('https://x.test/canonical')
+  })
 })
 
 describe('JSON-LD', () => {
@@ -178,6 +198,26 @@ describe('JSON-LD', () => {
     const html = `<script type="application/ld+json">
       {"@type":"Product","name":"X","offers":{"price":"11,99"}}</script>`
     expect(readProduct(findProduct(extractJsonLd(html))!).price).toBe(11.99)
+  })
+
+  // Mega Image nests the number one level deeper, in a UnitPriceSpecification.
+  // That is schema.org-legal and Google reads it, so it is the site being correct
+  // in a shape the other two do not use rather than the site being odd.
+  it('reads a price out of a priceSpecification', () => {
+    const html = `<script type="application/ld+json">{"@type":"Product","name":"X","offers":{
+      "@type":"Offer","availability":"https://schema.org/InStock","priceSpecification":{
+      "@type":"UnitPriceSpecification","price":24.19,"priceCurrency":"RON"}}}</script>`
+    const product = readProduct(findProduct(extractJsonLd(html))!)
+    expect(product.price).toBe(24.19)
+    expect(product.currency).toBe('RON')
+  })
+
+  it('prefers a price written directly on the offer over one nested below it', () => {
+    const html = `<script type="application/ld+json">{"@type":"Product","name":"X","offers":{
+      "price":5,"priceCurrency":"EUR","priceSpecification":{"price":9,"priceCurrency":"RON"}}}</script>`
+    const product = readProduct(findProduct(extractJsonLd(html))!)
+    expect(product.price).toBe(5)
+    expect(product.currency).toBe('EUR')
   })
 
   it('takes the first of an array of gtin13 values', () => {

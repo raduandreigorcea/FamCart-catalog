@@ -15,6 +15,12 @@ import { CarrefourScraper } from '../src/retailers/carrefour/index.ts'
 import { parseListingPage } from '../src/retailers/carrefour/listing.ts'
 import { buildProduct as buildLidl, externalIdFrom as lidlId } from '../src/retailers/lidl/index.ts'
 import { LidlScraper } from '../src/retailers/lidl/index.ts'
+import {
+  buildProduct as buildMega,
+  externalIdFrom as megaId,
+  categoryFromPath as megaCategory,
+  MegaImageScraper,
+} from '../src/retailers/mega-image/index.ts'
 import { extractJsonLd, findProduct, readProduct } from '../src/core/jsonld.ts'
 
 // ─── Auchan ──────────────────────────────────────────────────────────────────
@@ -474,5 +480,130 @@ describe('lidl', () => {
     const products = await collect(new LidlScraper().discoverProducts({ log, fetchImpl, limit: 3, minIntervalMs: 0 }), 10)
     expect(products.length).toBe(3)
     expect(products.every((p) => p.retailer === 'lidl')).toBe(true)
+  })
+})
+
+// ─── Mega Image ──────────────────────────────────────────────────────────────
+
+const MEGA_URLS = {
+  spray: 'https://www.mega-image.ro/Curatenie-si-nealimentare/Curatenie-casa/Insecticide/Spray-protector-impotriva-tantarilor-100ml/p/32688',
+  catFood: 'https://www.mega-image.ro/Animale-de-companie/Hrana-pisici/Hrana-pisici/Hrana-pentru-pisici-adulte-cu-pui-si-legume-1-5kg/p/26379',
+  hairDye: 'https://www.mega-image.ro/Cosmetice-si-ingrijire-personala/Ingrijirea-parului/Vopsea-pentru-par/Vopsea-pentru-par-Ciocolatiu-inchis-W2/p/99467',
+}
+
+describe('mega image', () => {
+  it('reads the price out of the nested priceSpecification', () => {
+    // The whole reason jsonld.ts learned about UnitPriceSpecification. Read the
+    // offer alone and every one of 8,879 products arrives with no price.
+    const product = jsonLdOf('mega-image/product-instock.html.gz')!
+    expect(product.price).toBe(24.19)
+    expect(product.currency).toBe('RON')
+    expect(product.brand).toBe('Autan')
+  })
+
+  it('publishes no barcode, the same accepted cost as Carrefour', () => {
+    // Two rows for one product is cosmetic; one row for two products is corrupt.
+    // Without a GTIN these merge only when the folded name and size agree.
+    for (const fixture of ['mega-image/product-instock.html.gz', 'mega-image/product-b.html.gz']) {
+      expect(jsonLdOf(fixture)!.gtin).toBeNull()
+    }
+  })
+
+  it('takes the id from the /p/ segment, which is the only one there is', () => {
+    expect(megaId(MEGA_URLS.spray)).toBe('32688')
+    expect(megaId(MEGA_URLS.catFood)).toBe('26379')
+    expect(megaId('https://www.mega-image.ro/Ceva/c/003001009')).toBeNull()
+  })
+
+  it('reads the shelf off the URL, which carries the whole department path', () => {
+    // The one thing this shop gives that Lidl does not. Lidl has to guess a
+    // category from words in a product name; here the department is in the path,
+    // written by the shop, three levels deep.
+    expect(megaCategory(MEGA_URLS.spray)).toBe('household')
+    expect(megaCategory(MEGA_URLS.catFood)).toBe('pet')
+    expect(megaCategory(MEGA_URLS.hairDye)).toBe('personal-care')
+    expect(megaCategory('https://www.mega-image.ro/Lactate-si-oua/Lapte/Lapte-UHT/Ceva/p/1')).toBe('dairy')
+    expect(megaCategory('https://www.mega-image.ro/Fructe-si-legume-proaspete/x/y/z/p/1')).toBe('produce')
+  })
+
+  it('splits the two departments that hold more than one shelf', () => {
+    // Bauturi is drinks AND alcohol; the breakfast aisle is bread AND coffee AND
+    // cereal. The top-level name alone would file beer under soft drinks.
+    expect(megaCategory('https://www.mega-image.ro/Bauturi/Bere/Bere-blonda/X/p/1')).toBe('alcohol')
+    expect(megaCategory('https://www.mega-image.ro/Bauturi/Sucuri/Suc-de-portocale/X/p/1')).toBe('drinks')
+    expect(megaCategory('https://www.mega-image.ro/Paine-cafea-cereale-si-mic-dejun/Cafea/Cafea-boabe/X/p/1')).toBe('drinks')
+    expect(megaCategory('https://www.mega-image.ro/Paine-cafea-cereale-si-mic-dejun/Paine/Paine-alba/X/p/1')).toBe('bakery')
+  })
+
+  it('answers null for a department it has never heard of', () => {
+    // Rather than guessing. A product with no shelf is listed by the admin
+    // dashboard and can be mapped deliberately; a wrong shelf is invisible.
+    expect(megaCategory('https://www.mega-image.ro/Gaming/x/y/p/1')).toBeNull()
+  })
+
+  it('builds a listing from a real page', () => {
+    const listing = buildMega(jsonLdOf('mega-image/product-instock.html.gz')!, MEGA_URLS.spray)!
+    expect(listing.retailer).toBe('mega-image')
+    expect(listing.externalId).toBe('32688')
+    expect(listing.price).toBe(24.19)
+    expect(listing.currency).toBe('RON')
+    expect(listing.available).toBe(true)
+    expect(listing.category).toBe('household')
+    expect(listing.quantity).toBe(100)
+    expect(listing.unit).toBe('ml')
+    expect(listing.productUrl).toBe(MEGA_URLS.spray)
+  })
+
+  it('refuses a page whose URL carries no product id', () => {
+    expect(buildMega(jsonLdOf('mega-image/product-instock.html.gz')!, 'https://www.mega-image.ro/x/c/1')).toBeNull()
+  })
+
+  it('crawls its sitemap, keeping the products and dropping the departments', async () => {
+    const fetchImpl = fixtureFetch([
+      { match: '/robots.txt', file: 'mega-image/robots.txt' },
+      { match: 'delhaizesitemapindex', file: 'mega-image/sitemap-index.xml' },
+      { match: 'delhaizesitemap-', file: 'mega-image/sitemap-products.xml' },
+      { match: '/p/', file: 'mega-image/product-instock.html.gz' },
+    ])
+    const log = testLogger()
+    const products = await collect(
+      new MegaImageScraper().discoverProducts({ log, fetchImpl, limit: 4, minIntervalMs: 0 }),
+      10,
+    )
+    expect(products.length).toBe(4)
+    expect(products.every((p) => p.retailer === 'mega-image')).toBe(true)
+    // The six /c/ department pages in the fixture must never be fetched: they
+    // carry no Product block, and on the live sitemap there are 1,828 of them.
+    expect(callsOf(fetchImpl).some((u) => /\/c\/\d+$/.test(u))).toBe(false)
+  })
+
+  it('is incremental, because its sitemap dates every entry', async () => {
+    const routes = [
+      { match: '/robots.txt', file: 'mega-image/robots.txt' },
+      { match: 'delhaizesitemapindex', file: 'mega-image/sitemap-index.xml' },
+      { match: 'delhaizesitemap-', file: 'mega-image/sitemap-products.xml' },
+      { match: '/p/', file: 'mega-image/product-instock.html.gz' },
+    ]
+    const run = async (since?: Date) =>
+      (await collect(
+        new MegaImageScraper().discoverProducts({
+          log: testLogger(),
+          fetchImpl: fixtureFetch(routes),
+          minIntervalMs: 0,
+          since,
+        }),
+        500,
+      )).length
+
+    // Compared against the same crawl without a date rather than against a
+    // number: the fixture's three shards are one file served three times, so an
+    // absolute count would be measuring the fixture. What matters is that a
+    // dated run fetches strictly less, and that it still fetches something --
+    // the entries here run from June to 9 September.
+    const all = await run()
+    const recent = await run(new Date('2026-09-08T00:00:00Z'))
+    expect(all).toBeGreaterThan(0)
+    expect(recent).toBeGreaterThan(0)
+    expect(recent).toBeLessThan(all)
   })
 })

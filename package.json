@@ -9,6 +9,7 @@
     "scrape:auchan": "node --experimental-strip-types src/cli/scrape.ts auchan",
     "scrape:carrefour": "node --experimental-strip-types src/cli/scrape.ts carrefour",
     "scrape:lidl": "node --experimental-strip-types src/cli/scrape.ts lidl",
+    "scrape:mega-image": "node --experimental-strip-types src/cli/scrape.ts mega-image",
     "scrape:all": "node --experimental-strip-types src/cli/scrape.ts all",
     "import": "node --experimental-strip-types src/cli/import.ts",
     "test": "vitest run",

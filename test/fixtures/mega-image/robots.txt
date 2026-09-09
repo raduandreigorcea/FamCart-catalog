@@ -1,0 +1,23 @@
+# Allow bots
+User-agent: *
+
+Disallow: /login
+Disallow: /errorPage
+Disallow: /my-account
+Disallow: /timeslot
+Disallow: /payment-method
+Disallow: */search/*
+Disallow: */search?*
+Disallow: */customerhub/quick-shop/*
+Disallow: */registration/*
+Disallow: */create-account*
+Disallow: */checkout*
+
+Disallow: /en-ro/*
+Disallow: /en/
+
+# Sitemap files
+
+Sitemap: https://www.mega-image.ro/sitemap/delhaizesitemapindex.xml
+
+Sitemap: https://www.mega-image.ro/site/ro/content/sitemap.xml

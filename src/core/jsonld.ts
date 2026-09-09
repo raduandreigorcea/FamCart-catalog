@@ -10,11 +10,13 @@
 //
 // Verified against real pages, and the variety is why this file is defensive:
 //
-//   Carrefour  offers.availability  "https://schema.org/InStock"   (full URL)
-//   Lidl       offers.availability  "OutOfStock" / "InStoreOnly"   (bare)
-//   Lidl       offers               an ARRAY, sometimes with no price at all
-//   Lidl       gtin13               an ARRAY of strings
-//   Carrefour  gtin                 absent entirely, on every product
+//   Carrefour   offers.availability  "https://schema.org/InStock"   (full URL)
+//   Lidl        offers.availability  "OutOfStock" / "InStoreOnly"   (bare)
+//   Lidl        offers               an ARRAY, sometimes with no price at all
+//   Lidl        gtin13               an ARRAY of strings
+//   Carrefour   gtin                 absent entirely, on every product
+//   Mega Image  offers.price         absent; the number is one level down, in
+//                                    offers.priceSpecification
 
 export interface JsonLdProduct {
   name: string | null
@@ -78,8 +80,8 @@ export function readProduct(node: Record<string, unknown>): JsonLdProduct {
     brand: brandOf(node['brand']),
     image: firstString(node['image']),
     description: str(node['description']),
-    price: num(offer?.['price']),
-    currency: str(offer?.['priceCurrency']),
+    price: num(offer?.['price']) ?? num(priceSpec(offer)?.['price']),
+    currency: str(offer?.['priceCurrency']) ?? str(priceSpec(offer)?.['priceCurrency']),
     availability: availabilityOf(offer?.['availability']),
     url: str(node['url']) ?? str(offer?.['url']),
   }
@@ -110,12 +112,35 @@ function typeOf(node: Record<string, unknown>): string[] {
 function firstOffer(offers: unknown): Record<string, unknown> | null {
   if (Array.isArray(offers)) {
     // Prefer an offer that actually names a price: Lidl ships several and only
-    // the in-stock one carries a number.
-    const priced = offers.find((o) => o && typeof o === 'object' && num((o as Record<string, unknown>)['price']) !== null)
+    // the in-stock one carries a number. A nested priceSpecification counts as
+    // naming one, or a shop that writes them that way would always get offers[0].
+    const priced = offers.find((o) => {
+      if (!o || typeof o !== 'object') return false
+      const record = o as Record<string, unknown>
+      return num(record['price']) !== null || num(priceSpec(record)?.['price']) !== null
+    })
     const chosen = priced ?? offers[0]
     return chosen && typeof chosen === 'object' ? (chosen as Record<string, unknown>) : null
   }
   return offers && typeof offers === 'object' ? (offers as Record<string, unknown>) : null
+}
+
+/**
+ * The nested price, which is where Mega Image puts theirs.
+ *
+ * A UnitPriceSpecification is the schema.org way to say "this price, for this
+ * much of it", and Google reads it -- so this is the site being more precise
+ * than the other two rather than being odd. Consulted only when the offer names
+ * no price directly, because where both exist the direct one is the offer's own
+ * and the specification may describe a different quantity.
+ */
+function priceSpec(offer: Record<string, unknown> | null): Record<string, unknown> | null {
+  const spec = offer?.['priceSpecification']
+  if (Array.isArray(spec)) {
+    const priced = spec.find((s) => s && typeof s === 'object' && num((s as Record<string, unknown>)['price']) !== null)
+    return priced ? (priced as Record<string, unknown>) : null
+  }
+  return spec && typeof spec === 'object' ? (spec as Record<string, unknown>) : null
 }
 
 function brandOf(brand: unknown): string | null {

@@ -7,15 +7,24 @@
 // submodule boundary; this checks what can be checked here.
 
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { SCRAPERS, IMPLEMENTED, scraperFor, kaufland, megaImage } from '../src/core/registry.ts'
+import { SCRAPERS, IMPLEMENTED, scraperFor, kaufland } from '../src/core/registry.ts'
 import { MARKETS, isMarket } from '../src/core/types.ts'
 
-const migration = readFileSync(
-  fileURLToPath(new URL('../supabase/migrations/002_catalog.sql', import.meta.url)),
-  'utf8',
-)
+const MIGRATIONS = fileURLToPath(new URL('../supabase/migrations/', import.meta.url))
+
+const migration = readFileSync(MIGRATIONS + '002_catalog.sql', 'utf8')
+
+// EVERY migration, for the rows. 002 seeded the first three shops and Mega Image
+// arrived in 011, because 002 is applied everywhere already and an edit there
+// would reach a fresh database and nothing else. So "which shops does the schema
+// claim" is a question about the whole directory, not about one file in it.
+const allMigrations = readdirSync(MIGRATIONS)
+  .filter((f) => f.endsWith('.sql'))
+  .sort()
+  .map((f) => readFileSync(MIGRATIONS + f, 'utf8'))
+  .join('\n')
 
 describe('the retailer registry', () => {
   it('gives every retailer a market the app can actually derive', () => {
@@ -41,19 +50,27 @@ describe('the retailer registry', () => {
     // no scraper must not have one, or its listings would be sweepable by a run
     // that can never happen.
     for (const scraper of IMPLEMENTED) {
-      expect(migration).toContain(`'${scraper.retailer}',`)
+      expect(allMigrations, `${scraper.retailer} has a row`).toContain(`'${scraper.retailer}',`)
     }
-    expect(migration).not.toContain("('kaufland'")
-    expect(migration).not.toContain("('mega-image'")
+    for (const scraper of SCRAPERS.filter((s) => !s.implemented)) {
+      expect(allMigrations, `${scraper.retailer} has no row`).not.toContain(`('${scraper.retailer}'`)
+    }
   })
 
-  it('keeps the unreadable retailers listed rather than deleting them', () => {
+  it('keeps the unreadable retailer listed rather than deleting it', () => {
     // Deleting the entry means the next person re-does the analysis and reaches
     // the same conclusion.
     expect(SCRAPERS).toContain(kaufland)
-    expect(SCRAPERS).toContain(megaImage)
     expect(kaufland.implemented).toBe(false)
-    expect(megaImage.implemented).toBe(false)
+  })
+
+  it('dates the analysis, because an undated one reads as permanent', () => {
+    // Mega Image sat here as unreadable for a month after it stopped being
+    // unreadable: its note said the pages carry no price, which had been true.
+    // A note without a date gives a reader no way to tell a finding from a fact.
+    for (const scraper of SCRAPERS.filter((s) => !s.implemented)) {
+      expect(scraper.note ?? '', `${scraper.retailer} note is dated`).toMatch(/\b20\d\d-\d\d-\d\d\b/)
+    }
   })
 
   it('says why an unimplemented retailer is unimplemented, HERE', () => {
