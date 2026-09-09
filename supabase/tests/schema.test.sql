@@ -1,7 +1,7 @@
 -- What the shape of the catalog guarantees, independent of anything that writes
 -- to it. If a claim in 002 is load-bearing, it is asserted here.
 begin;
-select plan(40);
+select plan(44);
 
 -- Every suite starts from an empty catalog rather than assuming one. `db reset`
 -- leaves the three retailer rows from 002 in place and nothing else, but these
@@ -66,6 +66,22 @@ select throws_ok(
 select is(
   (select count(*)::int from public.catalog_products), 1,
   'and the duplicate did not land');
+
+-- ─── the indexes the app's own calls depend on ───────────────────────────────
+-- Not performance trivia. Without these four, catalog_shops_for and
+-- bump_product_popularity are full scans of the whole catalog -- measured at
+-- 3.4 seconds against 121,000 products, for a lookup an ordinary shopping list
+-- makes on every load. They are asserted here because an index is invisible in
+-- every other test: dropping one leaves every result identical and every timing
+-- ruined.
+select has_index('public', 'catalog_products', 'catalog_products_name_folded',
+  'the folded product name is indexed, which is what catalog_shops_for asks for');
+select has_index('public', 'catalog_products', 'catalog_products_name_folded_prefix',
+  'and again with text_pattern_ops, which is what a prefix match needs');
+select has_index('public', 'catalog_listings', 'catalog_listings_retailer_name_folded',
+  'the folded retailer wording is indexed, which is the other half of that lookup');
+select has_index('public', 'catalog_products', 'catalog_products_merge_identity',
+  'and the merge key without its size segment, which is what a popularity bump resolves through');
 
 -- ─── bounds ──────────────────────────────────────────────────────────────────
 select throws_ok(

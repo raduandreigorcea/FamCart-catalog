@@ -7,7 +7,7 @@
 -- Promise.allSettled returns [] and the dropdown just gets worse. The app's CI
 -- runs this suite for that reason.
 begin;
-select plan(46);
+select plan(49);
 
 delete from public.catalog_scrape_runs;
 delete from public.catalog_listings;
@@ -180,6 +180,45 @@ select is((select count(*)::int from public.search_catalog('_', 50)), 0,
 select is((select count(*)::int from public.search_catalog('a', 50)), 0,
   'a single character is too short to be a question');
 
+-- ─── the candidate cap cannot throw away the best match ──────────────────────
+-- search_catalog gathers a bounded pool and then ranks it. The pool used to be
+-- "the first 500 rows the scan happened to yield", so a word carried by more
+-- products than that kept an arbitrary 500 -- and the name_exact and name_prefix
+-- rungs, the two the weights exist to guarantee, could be dropped before the
+-- ranking ever ran.
+--
+-- 600 products carrying the word, and the one NAMED it inserted last so it sits
+-- past the cap in heap order. It is now gathered by its own index first, and
+-- the pool is unioned onto that rather than replacing it.
+insert into public.catalog_products (canonical_name, brand)
+select 'Suport de widget model ' || g, 'Generic' from generate_series(1, 600) g;
+
+insert into public.catalog_products (canonical_name) values ('Widget');
+
+insert into public.catalog_listings
+  (product_id, retailer_id, external_id, retailer_name, price, currency, available, product_url)
+select p.id, r.id, 'W' || p.id, p.canonical_name, 9.99, 'RON', true,
+       'https://www.auchan.ro/p/' || p.id
+  from public.catalog_products p
+  cross join (select id from public.catalog_retailers where slug = 'auchan') r
+ where p.canonical_name = 'Widget' or p.canonical_name like 'Suport de widget%';
+
+select is(
+  (select match_type from public.search_catalog('widget', 50) limit 1),
+  'name_exact',
+  'a product NAMED the query wins even when 600 others carry the word');
+
+select is(
+  (select name from public.search_catalog('widget', 50) limit 1),
+  'Widget',
+  'and it is that product, not whichever 500 the scan reached first');
+
+delete from public.catalog_listings
+ where product_id in (select id from public.catalog_products
+                       where canonical_name = 'Widget' or canonical_name like 'Suport de widget%');
+delete from public.catalog_products
+ where canonical_name = 'Widget' or canonical_name like 'Suport de widget%';
+
 -- ─── barcode ─────────────────────────────────────────────────────────────────
 select is((select name from public.lookup_barcode(array['5941234567890'])), 'Apa plata Dorna 2L',
   'a scanned code resolves exactly');
@@ -227,6 +266,15 @@ select is(
   array['auchan'],
   'a disabled shop is not reported as carrying anything');
 update public.catalog_retailers set enabled = true where slug = 'carrefour';
+
+-- Two identical calls must answer identically. `distinct on` keeps whichever row
+-- sorts first, and until the id was added to the sort key, products tying on
+-- name, popularity and wording were separated by nothing -- so the maker on a
+-- list row could change because the planner picked a different join order.
+select is(
+  (select array_agg(maker order by name) from public.catalog_shops_for(array['Apa plata Dorna 2L', 'Dorna'])),
+  (select array_agg(maker order by name) from public.catalog_shops_for(array['Apa plata Dorna 2L', 'Dorna'])),
+  'the same list asked twice reports the same makers');
 
 select * from finish();
 rollback;
