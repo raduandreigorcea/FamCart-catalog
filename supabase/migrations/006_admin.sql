@@ -12,118 +12,14 @@
 -- filter on. admin/src/lib/data/catalog.ts moves with it.
 
 -- ─── browse ──────────────────────────────────────────────────────────────────
-create or replace function public.catalog_admin_products(
-  p_query        text        default null,
-  p_retailer     text        default null,
-  p_category     text        default null,
-  p_has_barcode  boolean     default null,
-  p_has_brand    boolean     default null,
-  p_has_image    boolean     default null,
-  p_has_quantity boolean     default null,
-  p_has_listing  boolean     default null,
-  p_available    boolean     default null,
-  p_earned       boolean     default null,
-  p_added_since  timestamptz default null,
-  p_limit        integer     default 25,
-  p_offset       integer     default 0
-)
-returns table (
-  id             uuid,
-  canonical_name text,
-  brand          text,
-  category       text,
-  quantity       numeric,
-  quantity_unit  text,
-  image_url      text,
-  add_count      integer,
-  listing_count  integer,
-  popularity     integer,
-  retailers      text[],
-  barcodes       text[],
-  min_price      numeric,
-  currency       text,
-  available      boolean,
-  merge_key      text,
-  first_seen_at  timestamptz,
-  total_count    bigint
-)
-language plpgsql
-stable
-security definer
-set search_path = public, extensions
-as $fn$
-declare
-  v_limit  integer := least(greatest(coalesce(p_limit, 25), 1), 200);
-  v_offset integer := greatest(coalesce(p_offset, 0), 0);
-  v_query  text := nullif(public.catalog_normalize(p_query), '');
-begin
-  if not public.catalog_is_admin() then
-    raise exception 'not an admin' using errcode = '42501';
-  end if;
-
-  -- A bad filter VALUE is a bug in the caller, not an empty result. Returning
-  -- nothing for a typo'd category would look exactly like a category with no
-  -- products in it.
-  if p_retailer is not null and not exists (select 1 from public.catalog_retailers where slug = p_retailer) then
-    raise exception 'unknown retailer: %', p_retailer using errcode = 'P0001', detail = 'bad_retailer';
-  end if;
-  if p_category is not null and p_category not in (
-    'produce','dairy','bakery','meat','fish','pantry','frozen','snacks','drinks',
-    'alcohol','baby','household','personal-care','health','pet','home','other'
-  ) then
-    raise exception 'unknown category: %', p_category using errcode = 'P0001', detail = 'bad_category';
-  end if;
-
-  return query
-  with facts as (
-    select p.id as product_id,
-           array_remove(array_agg(distinct r.slug), null) as retailers,
-           min(l.price) filter (where l.available) as min_price,
-           (array_agg(l.currency order by l.currency) filter (where l.currency is not null))[1] as currency,
-           coalesce(bool_or(l.available), false) as available
-      from public.catalog_products p
-      left join public.catalog_listings l on l.product_id = p.id
-      left join public.catalog_retailers r on r.id = l.retailer_id
-     group by p.id
-  ),
-  codes as (
-    select i.product_id, array_agg(i.identifier_value order by i.identifier_value) as barcodes
-      from public.catalog_identifiers i
-     where i.identifier_type = 'gtin'
-     group by i.product_id
-  ),
-  filtered as (
-    select p.*, f.retailers, f.min_price, f.currency, f.available,
-           coalesce(c.barcodes, '{}'::text[]) as barcodes
-      from public.catalog_products p
-      join facts f on f.product_id = p.id
-      left join codes c on c.product_id = p.id
-     where (v_query is null or p.search_blob like '%' ||
-             replace(replace(replace(v_query, '\', '\\'), '%', '\%'), '_', '\_') || '%')
-       and (p_retailer     is null or p_retailer = any (f.retailers))
-       and (p_category     is null or p.category = p_category)
-       and (p_has_barcode  is null or (c.barcodes is not null) = p_has_barcode)
-       and (p_has_brand    is null or (p.brand is not null) = p_has_brand)
-       and (p_has_image    is null or (p.image_url is not null) = p_has_image)
-       and (p_has_quantity is null or (p.quantity is not null) = p_has_quantity)
-       and (p_has_listing  is null or (p.listing_count > 0) = p_has_listing)
-       and (p_available    is null or f.available = p_available)
-       and (p_earned       is null or (p.add_count > 0) = p_earned)
-       and (p_added_since  is null or p.first_seen_at >= p_added_since)
-  )
-  select f.id, f.canonical_name, f.brand, f.category, f.quantity, f.quantity_unit,
-         f.image_url, f.add_count, f.listing_count, f.popularity,
-         f.retailers, f.barcodes, f.min_price, f.currency, f.available,
-         f.merge_key, f.first_seen_at,
-         count(*) over () as total_count
-    from filtered f
-   order by f.popularity desc, f.canonical_name asc, f.id asc
-   limit v_limit offset v_offset;
-end;
-$fn$;
-
-comment on function public.catalog_admin_products(text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, boolean, timestamptz, integer, integer) is
-  'Admin browse over products, with their listings folded in. total_count follows the filter, not the table.';
+-- catalog_admin_products LIVES IN 013, ALONE, with its comment and its grants.
+-- It was defined here first, and its body folded every product's listings
+-- before paging 25 of them -- 5.7 seconds on the real catalog, and a statement
+-- timeout on the dashboard. 013 pages first and folds only the page.
+--
+-- The definition did not stay here as well, for the reason migrations.test.ts
+-- gives: two files restating one function is a race whose winner is whichever
+-- was pushed last, and the loss is silent.
 
 -- ─── create ──────────────────────────────────────────────────────────────────
 -- A product created here has NO listing, which means no retailer sells it. That
@@ -367,13 +263,11 @@ $fn$;
 comment on function public.catalog_stats() is
   'Catalog and per-retailer scrape health. The place a scraper that started returning nothing becomes visible.';
 
-revoke all on function public.catalog_admin_products(text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, boolean, timestamptz, integer, integer) from public, anon;
 revoke all on function public.catalog_admin_create_product(text, text, text, numeric, text, text, text) from public, anon;
 revoke all on function public.catalog_admin_update_product(uuid, text, text, text, numeric, text, text, text) from public, anon;
 revoke all on function public.catalog_admin_delete_product(uuid) from public, anon;
 revoke all on function public.catalog_stats() from public, anon;
 
-grant execute on function public.catalog_admin_products(text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, boolean, timestamptz, integer, integer) to authenticated;
 grant execute on function public.catalog_admin_create_product(text, text, text, numeric, text, text, text) to authenticated;
 grant execute on function public.catalog_admin_update_product(uuid, text, text, text, numeric, text, text, text) to authenticated;
 grant execute on function public.catalog_admin_delete_product(uuid) to authenticated;
