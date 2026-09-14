@@ -31,6 +31,33 @@ import { parseListingPage } from './listing.ts'
 /** Guards against a department that pages forever. No real one comes near it. */
 const MAX_PAGES = 400
 
+// ─── which departments are groceries ─────────────────────────────────────────
+// Carrefour's department tree, read from its sitemap on 2026-09-14. Groceries
+// and personal care are whole departments; the home and baby departments are
+// mixed, and only their named aisles count -- cleaning, kitchen and the pet shop;
+// nappies, baby food and baby toiletries. Everything else is the non-food shop:
+// clothing (tex), sport, auto and DIY, books, IT, TV, appliances, toys, and the
+// promotions and campaigns, which are not departments at all.
+//
+// A PROMOTION DOES NOT DECIDE. A product seen in a promotion and in a grocery
+// department is groceries; the crawl keeps it when it reaches the department.
+const GROCERY_DEPARTMENTS = new Set(['bacanie-carrefour', 'cosmetice-si-ingrijire-personala'])
+
+const GROCERY_AISLES: Record<string, Set<string>> = {
+  'casa-gradina-si-petshop': new Set(['produse-curatenie-pentru-casa', 'petshop', 'ustensile-si-accesorii-bucatarie']),
+  'articole-bebelusi': new Set([
+    'scutece-si-servetele-umede', 'hrana-bebelusi', 'hranire-bebelusi', 'articole-de-baie',
+    'accesorii-igiena-si-sanatate-bebelusi', 'cosmetice-bebelusi',
+  ]),
+}
+
+export function carrefourDepartmentIsGrocery(department: string): boolean {
+  const [root, aisle] = new URL(department).pathname.split('/').filter(Boolean)
+  if (!root) return false
+  if (GROCERY_DEPARTMENTS.has(root)) return true
+  return aisle !== undefined && (GROCERY_AISLES[root]?.has(aisle) ?? false)
+}
+
 /**
  * Has the shop just served the same page again?
  *
@@ -71,13 +98,22 @@ export async function* crawlDepartments(options: {
   ctx: ScrapeContext
   departments: string[]
   counters: DepartmentCrawlCounters
+  /**
+   * Whether a department's products are groceries. A product is yielded the
+   * first time a grocery department shows it -- which may be after a promotion
+   * or a parent already did. Omitted, every department counts.
+   */
+  isGrocery?: (department: string) => boolean
+  /** Every product any department shows, grocery or not: the caller's coverage and exclusions. */
+  onSeen?: (externalId: string) => void
 }): AsyncGenerator<RetailerProduct> {
   const { http, ctx, departments, counters } = options
-  const seen = new Set<string>()
+  const yielded = new Set<string>()
 
   for (const department of departments) {
     if (ctx.signal?.aborted) return
     counters.departments++
+    const grocery = options.isGrocery ? options.isGrocery(department) : true
 
     let previous: string[] | null = null
     for (let page = 1; page <= MAX_PAGES; page++) {
@@ -116,11 +152,12 @@ export async function* crawlDepartments(options: {
       const ids = products.map((product) => product.externalId)
 
       for (const product of products) {
+        options.onSeen?.(product.externalId)
         // Deduplicated for OUTPUT only. Whether to turn another page is decided
         // below, from the page itself -- conflating the two is what stopped
         // every parent department on its first page.
-        if (seen.has(product.externalId)) continue
-        seen.add(product.externalId)
+        if (!grocery || yielded.has(product.externalId)) continue
+        yielded.add(product.externalId)
         counters.emitted++
         yield product
         if (ctx.limit && counters.emitted >= ctx.limit) return

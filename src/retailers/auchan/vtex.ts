@@ -166,6 +166,66 @@ export function toRetailerProduct(product: VtexProduct, retailer = 'auchan'): Re
 }
 
 
+// ─── which products are groceries ────────────────────────────────────────────
+// Auchan's own category tree, read on 2026-09-14 (/category/tree/2). A root is
+// either groceries as a whole, or mixed -- baby food beside pushchairs, Christmas
+// sweets beside artificial trees -- and then only the named aisles below it
+// count. Anything not listed is not groceries: flowers (Auto, Gradina si
+// Bricolaj), Fashion, Electro, toys, luggage. An ALLOWLIST, so a root Auchan adds
+// tomorrow is left out rather than let in.
+const fold = (value: string): string =>
+  value.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim()
+
+const GROCERY_ROOTS = new Set([
+  'fructe si legume',
+  'lactate si oua',
+  'bacanie',
+  'brutarie, cofetarie, gastro',
+  'bauturi si tutun',
+  'congelate',
+  'ready meals si mezeluri',
+  'carne si peste',
+  'dietetic si international',
+  'pet shop',
+  'curatenie si intretinere casa',
+])
+
+const GROCERY_AISLES: Record<string, Set<string>> = {
+  'ingrijire personala si cosmetice': new Set([
+    'igiena dentara', 'parafarmacie', 'parfumuri si produse sezon', 'produse ingrijire corp',
+    'produse ingrijire fata', 'produse ingrijire par', 'cosmetice coreene', 'deodorante si parfumuri',
+    'igiena intima si sanatate', 'grooming si barbierit', 'produse sezon',
+  ]),
+  bebe: new Set(['igiena si ingrijire bebe', 'lapte si bauturi bebe', 'mancare bebe']),
+  'jucarii si bebe': new Set(['igiena si ingrijire bebe', 'hrana bebe si lapte']),
+  // The kitchen and the consumables stay; towels, textiles, furniture and decor go.
+  'casa si curatenie': new Set([
+    'vesela si accesorii bucatarie', 'detergent si balsam rufe', 'intretinere casa', 'produse menaj',
+    'hartie igienica, prosoape si servetele', 'produse si solutii curatenie',
+  ]),
+  'casa, auto si brico': new Set(['preparare si gatit', 'servire si organizare']),
+  'bucurie de craciun': new Set(['ciocolata si dulciuri']),
+  craciun: new Set(['dulciuri de craciun', 'cosuri, cozonac si panettone']),
+  'sarbatoarea pastelui': new Set(['masa de paste', 'bauturi', 'dulciuri de paste', 'curatenia de paste']),
+}
+
+/**
+ * Whether a product is groceries, from the category paths it carries.
+ *
+ * ANY path decides it: a chocolate Santa filed under both "Bucurie de Craciun /
+ * Decoratiuni" and "Bacanie / Dulciuri" is chocolate. A product filed nowhere is
+ * not groceries.
+ */
+export function isAuchanGrocery(categories: string[] | undefined): boolean {
+  for (const path of categories ?? []) {
+    const [root, aisle] = path.split('/').filter(Boolean).map(fold)
+    if (!root) continue
+    if (GROCERY_ROOTS.has(root)) return true
+    if (aisle && GROCERY_AISLES[root]?.has(aisle)) return true
+  }
+  return false
+}
+
 /** The ancestor chain a product carries, longest first: /1000000/1020000/1021000/ */
 export function categoryPathsOf(product: VtexProduct): string[] {
   return (product.categoriesIds ?? []).filter((p) => /^\/[\d/]+\/$/.test(p))

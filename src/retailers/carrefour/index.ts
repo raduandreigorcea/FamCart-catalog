@@ -29,7 +29,7 @@ import type { RetailerProduct, RetailerScraper, ScrapeContext, Market, Category 
 import { HttpClient } from '../../core/http.ts'
 import { fetchRobots, isAllowed } from '../../core/robots.ts'
 import { collectSitemapEntries } from '../../core/pageCrawl.ts'
-import { crawlDepartments } from './departments.ts'
+import { crawlDepartments, carrefourDepartmentIsGrocery } from './departments.ts'
 import { isAvailable } from '../../core/jsonld.ts'
 import type { JsonLdProduct } from '../../core/jsonld.ts'
 import { parseQuantity, validGtin, httpsUrl, usableBrand } from '../../core/normalize.ts'
@@ -197,10 +197,30 @@ export class CarrefourScraper implements RetailerScraper {
     }
 
     const counters = { departments: 0, pages: 0, unreadable: 0, emitted: 0 }
+    // Every product any department showed -- groceries or not, since coverage is
+    // about what the crawl accounted for -- and the ones it kept.
     const seen = new Set<string>()
+    const kept = new Set<string>()
+    // Whether anything cut the crawl short, which decides whether the
+    // exclusions below may be reported at all.
+    let truncated = false
+    const crawlCtx: ScrapeContext = {
+      ...ctx,
+      reportIncomplete: (reason) => {
+        truncated = true
+        ctx.reportIncomplete?.(reason)
+      },
+    }
     try {
-      for await (const product of crawlDepartments({ http, ctx, departments, counters })) {
-        seen.add(product.externalId)
+      for await (const product of crawlDepartments({
+        http,
+        ctx: crawlCtx,
+        departments,
+        counters,
+        isGrocery: carrefourDepartmentIsGrocery,
+        onSeen: (id) => seen.add(id),
+      })) {
+        kept.add(product.externalId)
         yield product
       }
     } finally {
@@ -226,11 +246,27 @@ export class CarrefourScraper implements RetailerScraper {
       // aisle, a department that failed to load, a payload that moved -- the run
       // has no standing to declare the difference delisted.
       if (ratio < 0.95) {
+        truncated = true
         ctx.reportIncomplete?.(
           `carrefour: departments covered ${covered} of ${sitemapIds.size} sitemap products ` +
             `(${Math.round(ratio * 100)}%), below the 95% needed to conclude anything about the rest`,
         )
       }
+    }
+
+    // ONLY AFTER A WHOLE CRAWL. A product is groceries if ANY department shows
+    // it, and the departments arrive in no order that settles that early: a
+    // t-shirt-shaped promotion can be read before the grocery aisle holding the
+    // same product. So nothing is called non-grocery until every department has
+    // been read -- an exclusion from half a crawl would delete real groceries.
+    if (!truncated && !ctx.limit && !ctx.shard && !ctx.signal?.aborted) {
+      let excluded = 0
+      for (const id of seen) {
+        if (kept.has(id)) continue
+        excluded++
+        ctx.reportExcluded?.(id)
+      }
+      ctx.log.info('carrefour: outside groceries', { excluded, kept: kept.size })
     }
   }
 }

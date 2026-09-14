@@ -361,8 +361,10 @@ describe('carrefour', () => {
         {
           match: 'sitemap_001',
           body:
-            '<urlset><url><loc>https://carrefour.ro/aisle/</loc></url>' +
-            '<url><loc>https://carrefour.ro/aisle/leaf/</loc></url></urlset>',
+            // Under the grocery department, so this pins paging and not the
+            // groceries filter: a department outside groceries yields nothing.
+            '<urlset><url><loc>https://carrefour.ro/bacanie-carrefour/aisle/</loc></url>' +
+            '<url><loc>https://carrefour.ro/bacanie-carrefour/aisle/leaf/</loc></url></urlset>',
         },
         { match: 'sitemap_002', body: '<urlset></urlset>' },
         // Order matters: the more specific patterns first.
@@ -385,6 +387,64 @@ describe('carrefour', () => {
         singleOnly.some((p) => got.has(p.externalId)),
         'the parent was turned past its first page',
       ).toBe(true)
+    })
+
+    // Groceries only, and the exclusions that delete. A grocery department and a
+    // clothing one, each a single page, and no sitemap products, so coverage has
+    // nothing to object to.
+    function groceryAndClothing() {
+      return fixtureFetch([
+        { match: '/robots.txt', file: 'carrefour/robots.txt' },
+        { match: 'sitemap.xml', file: 'carrefour/sitemap-index.xml' },
+        {
+          match: 'sitemap_001',
+          body:
+            '<urlset><url><loc>https://carrefour.ro/bacanie-carrefour/</loc></url>' +
+            '<url><loc>https://carrefour.ro/tex/femei/</loc></url></urlset>',
+        },
+        { match: 'sitemap_002', body: '<urlset></urlset>' },
+        { match: '?p=', body: '<html></html>', status: 404 },
+        { match: '/bacanie-carrefour/', file: 'carrefour/listing-paged.html.gz' },
+        { match: '/tex/femei/', file: 'carrefour/listing-single.html.gz' },
+      ])
+    }
+    const idsOf = (file: string) => parseListingPage(readFixture(file))!.map((p) => p.externalId)
+
+    it('keeps only what a grocery department shows, and reports the rest after a whole crawl', async () => {
+      const excluded: string[] = []
+      const products = await collect(
+        new CarrefourScraper().discoverProducts({
+          log: testLogger(),
+          fetchImpl: groceryAndClothing(),
+          minIntervalMs: 0,
+          reportExcluded: (id: string) => excluded.push(id),
+        }),
+        500,
+      )
+      const grocery = new Set(idsOf('carrefour/listing-paged.html.gz'))
+      const clothingOnly = idsOf('carrefour/listing-single.html.gz').filter((id) => !grocery.has(id))
+
+      expect(products.length).toBeGreaterThan(0)
+      expect(products.every((p) => grocery.has(p.externalId))).toBe(true)
+      expect(clothingOnly.length, 'the fixtures differ, or this proves nothing').toBeGreaterThan(0)
+      expect(new Set(excluded)).toEqual(new Set(clothingOnly))
+    })
+
+    it('reports nothing from a crawl that did not read every department', async () => {
+      // A product in a clothing department may be in a grocery one not reached
+      // yet. Excluding it would delete groceries.
+      const excluded: string[] = []
+      await collect(
+        new CarrefourScraper().discoverProducts({
+          log: testLogger(),
+          fetchImpl: groceryAndClothing(),
+          minIntervalMs: 0,
+          limit: 1,
+          reportExcluded: (id: string) => excluded.push(id),
+        }),
+        500,
+      )
+      expect(excluded).toEqual([])
     })
 
     it('yields each product once, however many departments claim it', async () => {
