@@ -60,40 +60,9 @@ grant execute on function public.catalog_search_weights() to authenticated;
 -- and nothing about them changed.
 
 -- ─── barcode ─────────────────────────────────────────────────────────────────
--- The one lookup that goes nowhere near ranking: a GTIN is an exact key and
--- there is nothing to guess at. The app sends up to three candidate forms of a
--- scanned code (as printed, zero-padded 12 to 13, and stripped 13 to 12) because
--- the same article is filed under different lengths in different places.
-create or replace function public.lookup_barcode(p_codes text[], p_langs text[] default null)
-returns table (name text, maker text, popularity integer)
-language plpgsql
-security definer
-stable
-set search_path = public, extensions
-as $fn$
-begin
-  perform p_langs;
-  if p_codes is null or array_length(p_codes, 1) is null then
-    return;
-  end if;
-
-  return query
-  select p.canonical_name, p.brand, p.popularity
-    from public.catalog_identifiers i
-    join public.catalog_products p on p.id = i.product_id
-   where i.identifier_type = 'gtin'
-     and i.identifier_value = any (p_codes)
-   order by p.popularity desc, p.canonical_name
-   limit 1;
-end;
-$fn$;
-
-comment on function public.lookup_barcode(text[], text[]) is
-  'Exact GTIN lookup for a scanned barcode. p_langs is accepted and ignored.';
-
-revoke all on function public.lookup_barcode(text[], text[]) from public, anon;
-grant execute on function public.lookup_barcode(text[], text[]) to authenticated;
-grant execute on function public.lookup_barcode(text[], text[]) to service_role;
+-- lookup_barcode LIVES IN 014, ALONE, with its comment and its grants. It gained
+-- a market there: a scan in Italy must not find a product only a Romanian shop
+-- sells, and must read the name an Italian shop uses.
 
 -- ─── popularity ──────────────────────────────────────────────────────────────
 -- bump_product_popularity LIVES IN 009, ALONE, for the same reason search_catalog

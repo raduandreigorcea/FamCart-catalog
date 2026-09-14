@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+	<sitemap>
+<loc>https://www.lidl.be/p/export/BE/nl/product_sitemap.xml.gz</loc>
+</sitemap>
+
+	<sitemap>
+<loc>https://www.lidl.be/p/export/BE/fr/product_sitemap.xml.gz</loc>
+</sitemap>
+
+	<sitemap>
+		<loc>https://www.lidl.be/explore/assets/s/pages_nl-BE_be.xml.gz</loc>
+	</sitemap>
+	<sitemap>
+		<loc>https://www.lidl.be/explore/assets/s/pages_fr-BE_be.xml.gz</loc>
+	</sitemap>
+	<sitemap>
+		<loc>https://www.lidl.be/s/fr-BE/magasins/sitemap.xml</loc>
+	</sitemap>
+	<sitemap>
+		<loc>https://www.lidl.be/s/nl-BE/winkels/sitemap.xml</loc>
+	</sitemap>
+</sitemapindex>

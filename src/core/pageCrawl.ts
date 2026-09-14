@@ -37,6 +37,29 @@ export interface PageCrawlOptions {
    */
   urlFilter?: (url: string) => boolean
   /**
+   * Whether a page the crawl READ is worth importing, decided from the page.
+   *
+   * Different from urlFilter, which saves the fetch: this is for a shop whose URL
+   * says nothing about what is behind it, so the page has to be fetched to find
+   * out. Lidl files a pear tree and a pear the same way in its URLs and on
+   * different shelves in its pages. A page this refuses still counts toward
+   * coverage -- the shop advertised it and the crawl read it -- and is counted
+   * as `excluded` rather than `noProduct`, which stays a symptom worth seeing.
+   */
+  keep?: (html: string, url: string) => boolean
+  /**
+   * Refuse a page WITHOUT fetching it, for a shop whose URL already names the
+   * department (Mega Image: /Produse-sezoniere/...). Counted toward coverage
+   * like a page read: the shop advertised it and the crawl accounted for it.
+   */
+  skip?: (url: string) => boolean
+  /**
+   * The listing id a URL carries. Given, a page refused by `keep` or `skip` is
+   * reported through ctx.reportExcluded, and the importer removes what an earlier
+   * run imported under it.
+   */
+  idOf?: (url: string) => string | null
+  /**
    * Only relevant for a shop whose sitemap carries lastmod. When it does and
    * `ctx.since` is set, unchanged pages are skipped -- which is what makes a
    * daily Carrefour run minutes rather than hours.
@@ -51,6 +74,7 @@ export interface CrawlCounters {
   skipped: number
   delisted: number
   noProduct: number
+  excluded: number
   failed: number
 }
 
@@ -103,7 +127,9 @@ export async function* crawlProductPages(
   options: PageCrawlOptions,
 ): AsyncGenerator<RetailerProduct> {
   const { http, ctx, retailer, build, supportsIncremental } = options
-  const counters: CrawlCounters = { urls: 0, fetched: 0, skipped: 0, delisted: 0, noProduct: 0, failed: 0 }
+  const counters: CrawlCounters = {
+    urls: 0, fetched: 0, skipped: 0, delisted: 0, noProduct: 0, excluded: 0, failed: 0,
+  }
 
   const all = await collectSitemapEntries(http, ctx, options.sitemapUrls)
   const entries = options.urlFilter ? all.filter((e) => options.urlFilter!(e.loc)) : all
@@ -158,8 +184,21 @@ export async function* crawlProductPages(
   }
 
   let emitted = 0
+  // Refused by URL and never fetched: accounted for, so part of coverage.
+  let unread = 0
+  const excludeId = (url: string): void => {
+    const id = options.idOf?.(url)
+    if (id) ctx.reportExcluded?.(id)
+  }
   for (const entry of wanted) {
     if (ctx.signal?.aborted) return
+
+    if (options.skip?.(entry.loc)) {
+      counters.excluded++
+      unread++
+      excludeId(entry.loc)
+      continue
+    }
 
     let response
     try {
@@ -189,6 +228,12 @@ export async function* crawlProductPages(
     }
     if (!response.ok) {
       counters.failed++
+      continue
+    }
+
+    if (options.keep && !options.keep(response.body, entry.loc)) {
+      counters.excluded++
+      excludeId(entry.loc)
       continue
     }
 
@@ -225,6 +270,6 @@ export async function* crawlProductPages(
   if (!ctx.shard && !ctx.limit) {
     // Delisted pages are part of the index we accounted for: a 404 is the shop
     // answering, and the sweep is exactly what should follow it.
-    ctx.reportCoverage?.(counters.fetched + counters.delisted, wanted.length)
+    ctx.reportCoverage?.(counters.fetched + counters.delisted + unread, wanted.length)
   }
 }

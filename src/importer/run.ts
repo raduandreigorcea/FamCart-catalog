@@ -29,14 +29,42 @@ export interface RunTotals {
   identifiersAdded: number
   conflicts: number
   errors: number
+  /** Listings the scraper saw filed outside groceries. */
+  excluded: number
+  /** What removing them actually removed: listings, and products left with none. */
+  purgedListings: number
+  purgedProducts: number
   rejections: Record<string, number>
 }
 
 export function emptyTotals(): RunTotals {
   return {
     found: 0, valid: 0, rejected: 0, inserted: 0, updated: 0, unchanged: 0,
-    productsCreated: 0, identifiersAdded: 0, conflicts: 0, errors: 0, rejections: {},
+    productsCreated: 0, identifiersAdded: 0, conflicts: 0, errors: 0,
+    excluded: 0, purgedListings: 0, purgedProducts: 0, rejections: {},
   }
+}
+
+/**
+ * How long to wait before each retry of a batch the database never answered.
+ *
+ * On 2026-09-13 three of four shops died on a single unanswered batch: Mega
+ * Image after 1h50m on `fetch failed`, Auchan on its first batch with `Gateway
+ * Timeout`, Carrefour after 52 minutes with the same. The batches themselves
+ * averaged 613ms; what failed was the small catalog instance stalling for
+ * seconds at a time while it swapped, long enough for PostgREST to give up
+ * waiting for a connection. A stall like that passes in well under a minute,
+ * and a whole run thrown away for it is two hours of crawling lost.
+ *
+ * Long rather than snappy on purpose: retrying straight into an instance that
+ * is still swapping only adds to its load.
+ */
+export const RETRY_DELAYS_MS: readonly number[] = [5_000, 20_000, 60_000]
+
+export interface ScrapeRunOptions {
+  /** Injected by tests, which should not wait a minute and a half. */
+  sleep?: (ms: number) => Promise<void>
+  retryDelaysMs?: readonly number[]
 }
 
 export interface CatalogDb {
@@ -71,12 +99,22 @@ export class ScrapeRun {
   private readonly retailer: string
   private readonly log: Logger
   private readonly dryRun: boolean
+  private readonly sleep: (ms: number) => Promise<void>
+  private readonly retryDelaysMs: readonly number[]
 
-  constructor(db: CatalogDb, retailer: string, log: Logger, dryRun = false) {
+  constructor(
+    db: CatalogDb,
+    retailer: string,
+    log: Logger,
+    dryRun = false,
+    options: ScrapeRunOptions = {},
+  ) {
     this.db = db
     this.retailer = retailer
     this.log = log
     this.dryRun = dryRun
+    this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
+    this.retryDelaysMs = options.retryDelaysMs ?? RETRY_DELAYS_MS
   }
 
   async open(): Promise<void> {
@@ -114,16 +152,13 @@ export class ScrapeRun {
       return
     }
 
-    const { data, error } = await this.db.rpc('catalog_import_listings', {
-      p_rows: rows,
-      p_retailer: this.retailer,
-      p_run_id: this.runId,
-    })
+    const { data, error } = await this.importBatch(rows)
 
     if (error) {
       // A transport failure is NOT a per-row error: the whole batch is unknown.
       // Counting it as one error would understate it, and carrying on as if the
-      // rows landed would let the run close as completed and sweep them.
+      // rows landed would let the run close as completed and sweep them. By the
+      // time this throws, importBatch has already retried it; see there.
       throw new Error(`import failed for ${this.retailer}: ${describe(error)}`)
     }
 
@@ -140,6 +175,87 @@ export class ScrapeRun {
     for (const entry of errors.slice(0, 3)) {
       this.log.warn('row rejected by the importer', entry as Record<string, unknown>)
     }
+  }
+
+  /**
+   * One batch, retried while the failure is the transport's rather than the
+   * database's.
+   *
+   * SAFE TO RETRY because catalog_import_listings is idempotent: a batch that
+   * did land before the answer was lost lands again as `unchanged`. The totals
+   * are only ever taken from the answer that arrived, so nothing is counted
+   * twice here.
+   *
+   * An error Postgres itself raised is NOT retried. It carries a SQLSTATE, and
+   * the same rows would raise it again; the run should fail on the first one
+   * and say why.
+   */
+  private importBatch(rows: ImportRow[]): Promise<{ data: unknown; error: unknown }> {
+    return this.retrying('catalog_import_listings', {
+      p_rows: rows,
+      p_retailer: this.retailer,
+      p_run_id: this.runId,
+    })
+  }
+
+  /** An RPC, retried the way importBatch describes. */
+  private async retrying(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<{ data: unknown; error: unknown }> {
+    for (let attempt = 0; ; attempt++) {
+      const answer = await this.db.rpc(name, args)
+      if (!answer.error || !isTransient(answer.error) || attempt >= this.retryDelaysMs.length) {
+        return answer
+      }
+      const waitMs = this.retryDelaysMs[attempt]
+      this.log.warn(`${name} not answered, retrying`, {
+        retailer: this.retailer,
+        attempt: attempt + 1,
+        waitMs,
+        error: describe(answer.error),
+      })
+      await this.sleep(waitMs)
+    }
+  }
+
+  private excludedBuffer: string[] = []
+
+  /**
+   * A listing the shop files outside groceries. It is not imported, and whatever
+   * an earlier run imported under that id is removed.
+   *
+   * POSITIVE EVIDENCE, which is what makes it safe to act on in any run -- a
+   * partial one, a failed one -- unlike the sweep, which reads ABSENCE and so
+   * needs a run that saw the whole shop. See catalog_purge_listings in 015.
+   */
+  async exclude(externalId: string): Promise<void> {
+    this.totals.excluded++
+    this.excludedBuffer.push(externalId)
+    if (this.excludedBuffer.length >= BATCH_SIZE) await this.flushExclusions()
+  }
+
+  async flushExclusions(): Promise<void> {
+    if (this.excludedBuffer.length === 0) return
+    const ids = this.excludedBuffer
+    this.excludedBuffer = []
+
+    if (this.dryRun) {
+      this.log.info('dry run: would remove listings filed outside groceries', { rows: ids.length })
+      return
+    }
+
+    // Idempotent like the import: a batch whose answer was lost removes nothing
+    // the second time, because it already has.
+    const { data, error } = await this.retrying('catalog_purge_listings', {
+      p_external_ids: ids,
+      p_retailer: this.retailer,
+    })
+    if (error) throw new Error(`removing non-grocery listings failed for ${this.retailer}: ${describe(error)}`)
+
+    const result = (data ?? {}) as Record<string, unknown>
+    this.totals.purgedListings += num(result.listings_deleted)
+    this.totals.purgedProducts += num(result.products_deleted)
   }
 
   /** Report progress so a long crawl is legible while it is still running. */
@@ -174,6 +290,7 @@ export class ScrapeRun {
    */
   async complete(coveredIndex = false): Promise<Record<string, unknown> | null> {
     await this.flush()
+    await this.flushExclusions()
     if (this.dryRun || !this.runId) return null
     await this.heartbeat()
 
@@ -204,6 +321,7 @@ export class ScrapeRun {
    */
   async partial(reason: string): Promise<void> {
     await this.flush()
+    await this.flushExclusions()
     this.log.info('run closed as partial', { retailer: this.retailer, reason })
     if (this.dryRun || !this.runId) return
     await this.heartbeat()
@@ -218,6 +336,13 @@ export class ScrapeRun {
   async fail(reason: unknown): Promise<void> {
     const message = reason instanceof Error ? reason.message : String(reason)
     this.log.error('run failed', { retailer: this.retailer, reason: message })
+    // Exclusions are evidence, not a verdict, so a failed run still acts on the
+    // ones it gathered. Best effort: the failure being recorded matters more.
+    try {
+      await this.flushExclusions()
+    } catch (error) {
+      this.log.error('could not remove non-grocery listings', { error: describe(error) })
+    }
     if (this.dryRun || !this.runId) return
     // Whatever was already imported stays imported. Only the verdict changes.
     const { error } = await this.db.rpc('catalog_run_fail', {
@@ -235,6 +360,24 @@ export class ScrapeRun {
 function num(value: unknown): number {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : 0
+}
+
+/**
+ * Whether the database may simply not have been reachable.
+ *
+ * supabase-js reports a network failure (`TypeError: fetch failed`) and a
+ * gateway's non-JSON 504 (`Gateway Timeout`) with no code at all. PostgREST's
+ * own "timed out acquiring a connection from the pool" is PGRST003, and 57014
+ * is a statement cancelled by its timeout -- both what a stalled instance
+ * produces. Anything else with a code is Postgres or PostgREST refusing the
+ * request itself, and asking again gets the same refusal.
+ */
+function isTransient(error: unknown): boolean {
+  const code =
+    error && typeof error === 'object' && 'code' in error
+      ? String((error as { code: unknown }).code ?? '')
+      : ''
+  return code === '' || code === 'PGRST003' || code === '57014'
 }
 
 function describe(error: unknown): string {
