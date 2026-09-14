@@ -7,7 +7,7 @@
 -- Promise.allSettled returns [] and the dropdown just gets worse. The app's CI
 -- runs this suite for that reason.
 begin;
-select plan(49);
+select plan(64);
 
 delete from public.catalog_scrape_runs;
 delete from public.catalog_listings;
@@ -44,8 +44,8 @@ select lives_ok($$select * from public.search_catalog('apa', 100, array['RO'], a
 select has_function('public', 'search_catalog',
   array['text','integer','text[]','text[]','boolean','text[]'],
   'search_catalog keeps its signature, with the shop filter appended to the end of it');
-select has_function('public', 'lookup_barcode', array['text[]','text[]'],
-  'lookup_barcode keeps p_codes and an optional p_langs');
+select has_function('public', 'lookup_barcode', array['text[]','text[]','text[]'],
+  'lookup_barcode keeps p_codes, an optional p_langs, and an optional p_markets after them');
 select has_function('public', 'bump_product_popularity', array['text','text'],
   'bump_product_popularity takes exactly p_name and p_maker');
 
@@ -235,8 +235,8 @@ select is((select add_count from public.catalog_products where canonical_name = 
 -- A list row knows a name and a maker and nothing else, so showing which shop it
 -- came from is a lookup -- and one for the whole list at once, because twenty
 -- rows must not mean twenty round trips.
-select has_function('public', 'catalog_shops_for', array['text[]'],
-  'catalog_shops_for takes an array of names');
+select has_function('public', 'catalog_shops_for', array['text[]','text[]'],
+  'catalog_shops_for takes an array of names and an optional market');
 
 select is(
   (select retailers from public.catalog_shops_for(array['Apa plata Dorna 2L'])),
@@ -275,6 +275,64 @@ select is(
   (select array_agg(maker order by name) from public.catalog_shops_for(array['Apa plata Dorna 2L', 'Dorna'])),
   (select array_agg(maker order by name) from public.catalog_shops_for(array['Apa plata Dorna 2L', 'Dorna'])),
   'the same list asked twice reports the same makers');
+
+-- ─── a second country ────────────────────────────────────────────────────────
+-- The same water at an Italian shop, merged by its GTIN, and a milk only the
+-- Italian shop sells. A phone in one country must see that country's shops,
+-- under the name a shop there uses, and nothing only the other country sells --
+-- in search, in a scan, and in the badges on a list.
+insert into public.catalog_retailers (slug, name, country, domain)
+values ('esselunga', 'Esselunga', 'IT', 'esselunga.it');
+
+select public.catalog_import_listings($j$[
+  {"external_id":"E1","name":"Acqua naturale Dorna 2L","brand":"Dorna","gtin":"5941234567890",
+   "price":0.99,"currency":"EUR","quantity":2,"unit":"l",
+   "product_url":"https://www.esselunga.it/p/e1","available":true},
+  {"external_id":"E2","name":"Latte intero Granarolo 1L","brand":"Granarolo","gtin":"8002670000016",
+   "price":1.59,"currency":"EUR","quantity":1,"unit":"l",
+   "product_url":"https://www.esselunga.it/p/e2","available":true}
+]$j$::jsonb, 'esselunga');
+
+select is((select name from public.search_catalog('dorna 2', 50, array['RO'])), 'Apa plata Dorna 2L',
+  'named in Romania, a phone in Romania keeps the name it had');
+select is((select name from public.search_catalog('dorna 2', 50, array['IT'])), 'Acqua naturale Dorna 2L',
+  'a phone in Italy reads the name an Italian shop uses');
+select is((select retailers from public.search_catalog('dorna 2', 50, array['IT'])), array['esselunga'],
+  'and sees only the Italian shop, never the Romanian ones');
+select is((select name from public.search_catalog('acqua', 50, array['IT'])), 'Acqua naturale Dorna 2L',
+  'the Italian wording finds it in Italy');
+select is((select name from public.search_catalog('dorna 2', 50)), 'Apa plata Dorna 2L',
+  'with no market there is no local name to prefer');
+select is((select count(*)::int from public.search_catalog('latte', 50, array['RO'])), 0,
+  'a product only an Italian shop sells is not offered in Romania');
+select is((select name from public.search_catalog('latte', 50, array['IT'])), 'Latte intero Granarolo 1L',
+  'and a product named in Italy keeps its own name there');
+
+select is((select name from public.lookup_barcode(array['5941234567890'], null, array['IT'])), 'Acqua naturale Dorna 2L',
+  'a scan in Italy reads the Italian name');
+select is((select count(*)::int from public.lookup_barcode(array['8002670000016'], null, array['RO'])), 0,
+  'a scan in Romania finds nothing that only an Italian shop sells');
+select is((select name from public.lookup_barcode(array['8002670000016'])), 'Latte intero Granarolo 1L',
+  'and with no market a scan still finds it, as before');
+
+select is((select retailers from public.catalog_shops_for(array['Acqua naturale Dorna 2L'], array['IT'])), array['esselunga'],
+  'a list in Italy wears Italian shop badges only');
+select is((select name from public.catalog_shops_for(array['Acqua naturale Dorna 2L'], array['IT'])), 'Acqua naturale Dorna 2L',
+  'answered under the name the Italian list row carries, so the badge finds its row');
+select is((select count(*)::int from public.catalog_shops_for(array['Latte intero Granarolo 1L'], array['RO'])), 0,
+  'and a list in Romania gets no badge for an Italian-only product');
+
+select is(
+  (select count(*)::int from pg_proc p
+     join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname in ('lookup_barcode', 'catalog_shops_for')),
+  2,
+  'one lookup_barcode and one catalog_shops_for, so PostgREST never has to choose');
+
+-- The name a phone in Italy was shown is the name its bump sends back.
+select public.bump_product_popularity('Acqua naturale Dorna 2L', 'Dorna');
+select is((select add_count from public.catalog_products where canonical_name = 'Apa plata Dorna 2L'), 2,
+  'a bump sent with the Italian name still counts for the product');
 
 select * from finish();
 rollback;

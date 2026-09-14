@@ -18,7 +18,11 @@
 import type { RetailerScraper, Market } from './types.ts'
 import { auchan } from '../retailers/auchan/index.ts'
 import { carrefour } from '../retailers/carrefour/index.ts'
-import { lidl } from '../retailers/lidl/index.ts'
+import { LIDL_SCRAPERS } from '../retailers/lidl/index.ts'
+import { ALDI_SCRAPERS } from '../retailers/aldi/index.ts'
+import { carrefourIt } from '../retailers/carrefour-it/index.ts'
+import { mpreis } from '../retailers/mpreis/index.ts'
+import { delhaize } from '../retailers/delhaize/index.ts'
 import { megaImage } from '../retailers/mega-image/index.ts'
 
 /** A retailer that has been looked at and cannot currently be read. */
@@ -59,6 +63,17 @@ export const kaufland = new UnimplementedScraper(
     'would mean "on offer here until Sunday" where every other badge means "sold here".',
 )
 
+export const diaEs = new UnimplementedScraper(
+  'dia-es',
+  'ES',
+  'dia.es',
+  'dia.es refuses this crawler (checked 2026-09-14): its robots.txt allows product pages, and ' +
+    'the same sitemap answers 200 to a user agent without "Bot" in it, but 403 to ' +
+    'FamCartCatalogBot. That is the shop saying no to crawlers, and this repository does not ' +
+    'disguise itself to get past a no. The site would otherwise read well: 6,381 products in a ' +
+    'Product block with a price, the aisle in every URL, no barcode and no brand.',
+)
+
 // MEGA IMAGE WAS AN UnimplementedScraper HERE, and the note it carried had gone
 // stale. It said the pages weigh ~730 KB and publish no price; they weigh ~235 KB
 // and the price is there, one level down in a priceSpecification. 8,879 products
@@ -70,7 +85,20 @@ export const kaufland = new UnimplementedScraper(
 // it stopped being true. Kaufland's note above now carries the date it was
 // checked, for that reason.
 
-export const SCRAPERS: RetailerScraper[] = [auchan, carrefour, lidl, megaImage, kaufland]
+// Lidl and Aldi are one scraper per country, each chain one class: see
+// LIDL_COUNTRIES and ALDI_COUNTRIES.
+export const SCRAPERS: RetailerScraper[] = [
+  auchan,
+  carrefour,
+  ...LIDL_SCRAPERS,
+  ...ALDI_SCRAPERS,
+  carrefourIt,
+  mpreis,
+  delhaize,
+  megaImage,
+  kaufland,
+  diaEs,
+]
 
 export const IMPLEMENTED: RetailerScraper[] = SCRAPERS.filter((s) => s.implemented)
 

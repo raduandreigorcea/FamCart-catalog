@@ -41,7 +41,7 @@
 import type { RetailerProduct, RetailerScraper, ScrapeContext, Market } from '../../core/types.ts'
 import { HttpClient, CircuitOpenError } from '../../core/http.ts'
 import { fetchRobots, isAllowed } from '../../core/robots.ts'
-import { toRetailerProduct, parseResourcesHeader, categoryPathsOf } from './vtex.ts'
+import { toRetailerProduct, parseResourcesHeader, categoryPathsOf, isAuchanGrocery } from './vtex.ts'
 import type { VtexProduct } from './vtex.ts'
 
 const ORIGIN = 'https://www.auchan.ro'
@@ -242,6 +242,15 @@ export class AuchanScraper implements RetailerScraper {
         const id = String(raw.productId ?? '')
         if (!id || seen.has(id)) continue
         seen.add(id)
+
+        // Groceries only, by Auchan's own category paths (see isAuchanGrocery).
+        // A t-shirt still enqueued its categories above -- the crawl needs them
+        // to reach the rest of the shop -- and is reported, so that what an
+        // earlier run imported of it is removed.
+        if (!isAuchanGrocery(raw.categories)) {
+          ctx.reportExcluded?.(id)
+          continue
+        }
 
         const product = toRetailerProduct(raw, this.retailer)
         if (product) yield product

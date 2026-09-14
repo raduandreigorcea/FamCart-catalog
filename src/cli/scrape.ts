@@ -107,6 +107,13 @@ async function scrapeOne(
   // reported at all, the run falls back to the floor.
   let coverage: { seen: number; advertised: number } | null = null
 
+  // Reported synchronously by the scraper, handed to the importer between
+  // products, since removing them is a network call the generator cannot await.
+  const excluded: string[] = []
+  const drainExcluded = async (): Promise<void> => {
+    for (const id of excluded.splice(0)) await run.exclude(id)
+  }
+
   try {
     await run.open()
 
@@ -123,14 +130,19 @@ async function scrapeOne(
       reportCoverage: (seen, advertised) => {
         coverage = { seen, advertised }
       },
+      reportExcluded: (id) => {
+        excluded.push(id)
+      },
     })) {
       if (args.ndjson) process.stdout.write(JSON.stringify(product) + '\n')
       await run.add(product)
+      await drainExcluded()
       if (++sinceLastBeat >= 500) {
         await run.heartbeat()
         sinceLastBeat = 0
       }
     }
+    await drainExcluded()
 
     if (controller.signal.aborted) {
       // The generator stops cleanly on abort, so without this check an
@@ -207,6 +219,12 @@ async function scrapeOne(
     })
     return true
   } catch (error) {
+    // What was reported before the failure is still evidence; run.fail removes it.
+    try {
+      await drainExcluded()
+    } catch {
+      // run.fail below records the failure either way.
+    }
     await run.fail(error)
     log.error('failed', {
       retailer: scraper.retailer,

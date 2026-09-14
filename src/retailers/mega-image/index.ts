@@ -93,6 +93,25 @@ const SHELVES: Array<[RegExp, Category]> = [
   [/^\/Equilibrium\//i, 'health'],
 ]
 
+// ─── which products are groceries ────────────────────────────────────────────
+// Mega Image is a supermarket, and almost every department is groceries --
+// including the themed ones ("Calitate la preturi bune zi de zi", "Mega Gustul
+// bun de luat acasa") that are food under a marketing name. So this one is a
+// DENYLIST of the few that are not, read from the catalog's own listings on
+// 2026-09-14: the seasonal shop (bags, towels, plush toys, charcoal), gaming,
+// electronics and batteries, and party toys.
+const NOT_GROCERIES: RegExp[] = [
+  /^\/Produse-sezoniere\//i,
+  /^\/Gaming\//i,
+  /^\/Curatenie-si-nealimentare\/Electronice-si-auto\//i,
+  /^\/Mama-si-ingrijire-copil\/Jucarii-si-accesorii-petrecere\//i,
+]
+
+export function megaImageIsGrocery(url: string): boolean {
+  const path = new URL(url).pathname
+  return !NOT_GROCERIES.some((pattern) => pattern.test(path))
+}
+
 export function categoryFromPath(url: string): Category | null {
   const path = new URL(url).pathname
   for (const [pattern, category] of SHELVES) {
@@ -165,6 +184,10 @@ export class MegaImageScraper implements RetailerScraper {
       // Product block. Fetching them to find that out costs half an hour and
       // buries the real "this page had no product" signal under noise.
       urlFilter: (url) => PRODUCT_URL.test(new URL(url).pathname),
+      // The URL names the department, so a non-grocery page is refused without
+      // spending a request on it.
+      skip: (url) => !megaImageIsGrocery(url),
+      idOf: (url) => externalIdFrom(url),
       build: (product, url) => buildProduct(product, url),
     })
   }

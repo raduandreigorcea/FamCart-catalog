@@ -107,6 +107,16 @@ export interface ScrapeContext {
    * delta floor, which is where everything was before.
    */
   reportCoverage?: (seen: number, advertised: number) => void
+  /**
+   * Say that the shop files this listing OUTSIDE GROCERIES: a t-shirt, a drill,
+   * a bunch of flowers. It is not imported, and the importer removes whatever an
+   * earlier run imported under the same id (catalog_purge_listings).
+   *
+   * Report only what the shop's own department says. An id reported by mistake
+   * is a product deleted, so a scraper that cannot tell yet -- Carrefour, until
+   * it has seen every department a product sits in -- must wait until it can.
+   */
+  reportExcluded?: (externalId: string) => void
   /** Somewhere to say what is happening. */
   log: Logger
   /**

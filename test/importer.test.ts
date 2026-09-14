@@ -6,7 +6,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { validate } from '../src/importer/validate.ts'
-import { ScrapeRun } from '../src/importer/run.ts'
+import { ScrapeRun, RETRY_DELAYS_MS } from '../src/importer/run.ts'
 import type { CatalogDb } from '../src/importer/run.ts'
 import { connect } from '../src/importer/run.ts'
 import type { RetailerProduct } from '../src/core/types.ts'
@@ -142,14 +142,84 @@ describe('ScrapeRun', () => {
     expect(run.totals.rejections['no-name']).toBe(1)
   })
 
-  it('treats a transport failure as fatal, not as one bad row', async () => {
+  it('treats a transport failure that outlasts every retry as fatal, not as one bad row', async () => {
     // The whole batch is unknown. Carrying on would let the run close as
     // completed and sweep rows that may well have landed.
-    const { db } = fakeDb({ ...OPEN, catalog_import_listings: new Error('connection reset') })
-    const run = new ScrapeRun(db, 'auchan', testLogger())
+    const { db, calls } = fakeDb({ ...OPEN, catalog_import_listings: new Error('connection reset') })
+    const run = new ScrapeRun(db, 'auchan', testLogger(), false, { sleep: async () => {} })
     await run.open()
     await run.add(product())
     await expect(run.flush()).rejects.toThrow(/connection reset/)
+    expect(calls.filter((c) => c.name === 'catalog_import_listings')).toHaveLength(
+      1 + RETRY_DELAYS_MS.length,
+    )
+  })
+
+  it('retries a batch the database never answered, and counts it once', async () => {
+    // What killed three of four shops on 2026-09-13: one unanswered batch, on
+    // an instance that was answering again seconds later.
+    const imports: number[] = []
+    let failures = 2
+    const db: CatalogDb = {
+      async rpc(name) {
+        if (name === 'catalog_run_open') return { data: 'run-1', error: null }
+        if (name === 'catalog_import_listings') {
+          imports.push(1)
+          if (failures-- > 0) return { data: null, error: { message: 'Gateway Timeout' } }
+          return { data: { inserted: 1 }, error: null }
+        }
+        return { data: {}, error: null }
+      },
+    }
+    const waits: number[] = []
+    const run = new ScrapeRun(db, 'auchan', testLogger(), false, {
+      sleep: async (ms) => {
+        waits.push(ms)
+      },
+    })
+    await run.open()
+    await run.add(product())
+    await run.flush()
+
+    expect(imports).toHaveLength(3)
+    expect(waits).toEqual(RETRY_DELAYS_MS.slice(0, 2))
+    expect(run.totals.inserted).toBe(1)
+  })
+
+  it('retries a PostgREST pool timeout, which is a stall and not a refusal', async () => {
+    let failures = 1
+    const db: CatalogDb = {
+      async rpc(name) {
+        if (name === 'catalog_import_listings' && failures-- > 0) {
+          return { data: null, error: { code: 'PGRST003', message: 'Timed out acquiring connection' } }
+        }
+        return { data: name === 'catalog_run_open' ? 'run-1' : {}, error: null }
+      },
+    }
+    const run = new ScrapeRun(db, 'auchan', testLogger(), false, { sleep: async () => {} })
+    await run.open()
+    await run.add(product())
+    await expect(run.flush()).resolves.toBeUndefined()
+  })
+
+  it('does not retry an error the database itself raised', async () => {
+    // Same rows, same refusal. Waiting a minute and a half to hear it again
+    // only delays the run saying why it failed.
+    const { db, calls } = fakeDb({
+      ...OPEN,
+      catalog_import_listings: Object.assign(new Error('permission denied'), { code: '42501' }),
+    })
+    const waits: number[] = []
+    const run = new ScrapeRun(db, 'auchan', testLogger(), false, {
+      sleep: async (ms) => {
+        waits.push(ms)
+      },
+    })
+    await run.open()
+    await run.add(product())
+    await expect(run.flush()).rejects.toThrow(/permission denied/)
+    expect(calls.filter((c) => c.name === 'catalog_import_listings')).toHaveLength(1)
+    expect(waits).toEqual([])
   })
 
   it('closes a failed run as failed, and never as completed', async () => {
@@ -172,6 +242,45 @@ describe('ScrapeRun', () => {
     await run.open()
     await run.complete()
     expect(log.lines.some((l) => l.level === 'error' && l.message.includes('refused to sweep'))).toBe(true)
+  })
+
+  it('removes what the scraper excluded, naming the retailer, when the run closes', async () => {
+    const { db, calls } = fakeDb({
+      ...OPEN,
+      catalog_import_listings: {},
+      catalog_purge_listings: { listings_deleted: 2, products_deleted: 1 },
+      catalog_run_complete: { status: 'completed' },
+    })
+    const run = new ScrapeRun(db, 'auchan', testLogger())
+    await run.open()
+    await run.exclude('X1')
+    await run.exclude('X2')
+    await run.complete()
+
+    const purge = calls.find((c) => c.name === 'catalog_purge_listings')
+    expect(purge?.args).toEqual({ p_external_ids: ['X1', 'X2'], p_retailer: 'auchan' })
+    expect(run.totals).toMatchObject({ excluded: 2, purgedListings: 2, purgedProducts: 1 })
+  })
+
+  it('removes exclusions even from a run that closes as partial, because they are evidence', async () => {
+    // An exclusion is "the shop filed this outside groceries", seen with our own
+    // eyes. It does not depend on having read the whole shop, unlike the sweep.
+    const { db, calls } = fakeDb({ ...OPEN, catalog_purge_listings: {}, catalog_run_partial: null })
+    const run = new ScrapeRun(db, 'auchan', testLogger())
+    await run.open()
+    await run.exclude('X1')
+    await run.partial('--limit 5')
+    expect(calls.some((c) => c.name === 'catalog_purge_listings')).toBe(true)
+  })
+
+  it('removes nothing in a dry run, and still counts what it would', async () => {
+    const { db, calls } = fakeDb()
+    const run = new ScrapeRun(db, 'auchan', testLogger(), true)
+    await run.open()
+    await run.exclude('X1')
+    await run.complete()
+    expect(calls.length).toBe(0)
+    expect(run.totals.excluded).toBe(1)
   })
 
   it('writes nothing at all in a dry run', async () => {
