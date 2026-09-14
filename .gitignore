@@ -13,3 +13,7 @@ supabase/.temp
 
 dist/
 *.log
+
+# The knowledge graph graphify writes for local code search. Regenerated on
+# demand, machine-specific, and large.
+graphify-out/
