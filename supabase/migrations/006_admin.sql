@@ -192,83 +192,16 @@ comment on function public.catalog_admin_delete_product(uuid) is
   'Delete a product and everything hanging off it. The next scrape may recreate it.';
 
 -- ─── health ──────────────────────────────────────────────────────────────────
--- THE "A SCRAPER STARTED RETURNING ZERO" ALARM.
---
--- The catalog can rot in a way no error reports: a retailer changes their markup
--- or their API, the scraper keeps completing, and the numbers quietly fall. So
--- every retailer's last run is reported next to the one before it, with the
--- delta, and the runs that refused to sweep say why. That is the difference
--- between noticing in a day and noticing when somebody complains that search
--- got worse.
-create or replace function public.catalog_stats()
-returns jsonb
-language plpgsql
-stable
-security definer
-set search_path = public
-as $fn$
-declare
-  v_out jsonb;
-begin
-  if not public.catalog_is_admin() then
-    raise exception 'not an admin' using errcode = '42501';
-  end if;
-
-  select jsonb_build_object(
-    'products',      (select count(*) from public.catalog_products),
-    'listings',      (select count(*) from public.catalog_listings),
-    'unavailable',   (select count(*) from public.catalog_listings where not available),
-    'identifiers',   (select count(*) from public.catalog_identifiers),
-    'with_barcode',  (select count(distinct product_id) from public.catalog_identifiers),
-    'with_price',    (select count(distinct product_id) from public.catalog_listings where price is not null),
-    'earned',        (select count(*) from public.catalog_products where add_count > 0),
-    'orphans',       (select count(*) from public.catalog_products where listing_count = 0),
-    'retailers', (
-      select coalesce(jsonb_agg(x order by x ->> 'slug'), '[]'::jsonb) from (
-        select jsonb_build_object(
-          'slug', r.slug,
-          'country', r.country,
-          'enabled', r.enabled,
-          'listings',    (select count(*) from public.catalog_listings l where l.retailer_id = r.id),
-          'available',   (select count(*) from public.catalog_listings l where l.retailer_id = r.id and l.available),
-          'last_run',    to_jsonb(last_run.*),
-          'previous_valid', prev.products_valid,
-          -- The number worth looking at: this run against the one before it.
-          'delta', case when prev.products_valid is null or last_run.products_valid is null
-                        then null else last_run.products_valid - prev.products_valid end
-        ) as x
-          from public.catalog_retailers r
-          left join lateral (
-            select s.status, s.started_at, s.finished_at, s.products_found, s.products_valid,
-                   s.products_rejected, s.inserted, s.updated, s.unchanged,
-                   s.marked_unavailable, s.error_count, s.error
-              from public.catalog_scrape_runs s
-             where s.retailer_id = r.id
-             order by s.started_at desc limit 1
-          ) last_run on true
-          left join lateral (
-            select s.products_valid
-              from public.catalog_scrape_runs s
-             where s.retailer_id = r.id and s.status = 'completed'
-             order by s.started_at desc offset 1 limit 1
-          ) prev on true
-      ) t
-    )
-  ) into v_out;
-
-  return v_out;
-end;
-$fn$;
-
-comment on function public.catalog_stats() is
-  'Catalog and per-retailer scrape health. The place a scraper that started returning nothing becomes visible.';
+-- catalog_stats is NOT defined here any more. It moved to 020_stats_cache.sql,
+-- which counts into a cache on a schedule instead of on every call (the old
+-- body timed out under a running scrape). Do not restate it in this file:
+-- re-pushing 006 would put the counting body back. test/migrations.test.ts
+-- refuses a function defined in two files.
 
 revoke all on function public.catalog_admin_create_product(text, text, text, numeric, text, text, text) from public, anon;
 revoke all on function public.catalog_admin_update_product(uuid, text, text, text, numeric, text, text, text) from public, anon;
 revoke all on function public.catalog_admin_delete_product(uuid) from public, anon;
-revoke all on function public.catalog_stats() from public, anon;
 
 grant execute on function public.catalog_admin_create_product(text, text, text, numeric, text, text, text) to authenticated;
 grant execute on function public.catalog_admin_update_product(uuid, text, text, text, numeric, text, text, text) to authenticated;
 grant execute on function public.catalog_admin_delete_product(uuid) to authenticated;
-grant execute on function public.catalog_stats() to authenticated;
