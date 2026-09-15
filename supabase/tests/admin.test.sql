@@ -1,7 +1,7 @@
 -- The admin surface. Two things worth testing: that every door is locked, and
 -- that the filters narrow the thing they claim to narrow.
 begin;
-select plan(24);
+select plan(28);
 
 delete from public.catalog_scrape_runs;
 delete from public.catalog_listings;
@@ -111,6 +111,30 @@ select is(
     where x ->> 'slug' = 'auchan'),
   'auchan',
   'the health report names every retailer, so a scraper that stopped reporting is visible');
+
+-- ─── the counts come from the cache (020) ────────────────────────────────────
+-- The report no longer counts on every call; it reads what the last refresh
+-- counted. So a count is only as right as the refresh, and that is tested here.
+select public.catalog_stats_refresh();
+
+select is((public.catalog_stats() ->> 'products')::bigint,
+  (select count(*) from public.catalog_products),
+  'the cached product count is the table''s count');
+select is(
+  (select (x ->> 'listings')::bigint from jsonb_array_elements(public.catalog_stats() -> 'retailers') x
+    where x ->> 'slug' = 'auchan'),
+  (select count(*) from public.catalog_listings l join public.catalog_retailers r on r.id = l.retailer_id
+    where r.slug = 'auchan'),
+  'and so is each shop''s listing count');
+select isnt(public.catalog_stats() ->> 'counted_at', null,
+  'and the report says when it was counted, so the page can say how old it is');
+
+-- The refresh counts the whole catalog; a signed-in caller must not be able to
+-- make it do that on demand.
+set local role authenticated;
+select throws_ok($$select public.catalog_stats_refresh()$$, '42501', null,
+  'the refresh is not callable by a signed-in user');
+reset role;
 
 select * from finish();
 rollback;
