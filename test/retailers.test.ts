@@ -410,7 +410,7 @@ describe('carrefour', () => {
     }
     const idsOf = (file: string) => parseListingPage(readFixture(file))!.map((p) => p.externalId)
 
-    it('keeps only what a grocery department shows, and reports the rest after a whole crawl', async () => {
+    it('keeps only what a grocery department shows, and reports the rest', async () => {
       const excluded: string[] = []
       const products = await collect(
         new CarrefourScraper().discoverProducts({
@@ -428,6 +428,116 @@ describe('carrefour', () => {
       expect(products.every((p) => grocery.has(p.externalId))).toBe(true)
       expect(clothingOnly.length, 'the fixtures differ, or this proves nothing').toBeGreaterThan(0)
       expect(new Set(excluded)).toEqual(new Set(clothingOnly))
+    })
+
+    // EXCLUSIONS AS THEY ARE READ, NOT AT THE END. The whole shop is 3,551
+    // departments and about eight hours at the shop's own pace, against a job
+    // killed at five, and reported only at the end not one exclusion was ever
+    // made. So every grocery department is read first: once all of them are
+    // done, a product any other department shows is known to be outside
+    // groceries, and can be reported the moment it is read.
+    function shop(paths: string[], extra: Parameters<typeof fixtureFetch>[0] = []) {
+      return fixtureFetch([
+        { match: '/robots.txt', file: 'carrefour/robots.txt' },
+        { match: 'sitemap.xml', file: 'carrefour/sitemap-index.xml' },
+        {
+          match: 'sitemap_001',
+          body: `<urlset>${paths.map((p) => `<url><loc>https://carrefour.ro${p}</loc></url>`).join('')}</urlset>`,
+        },
+        { match: 'sitemap_002', body: '<urlset></urlset>' },
+        { match: '?p=', body: '<html></html>', status: 404 },
+        ...extra,
+        { match: '/bacanie-carrefour/', file: 'carrefour/listing-paged.html.gz' },
+        { match: '/tex/', file: 'carrefour/listing-single.html.gz' },
+      ])
+    }
+
+    it('reads every grocery department before any other, however long its URL', async () => {
+      const fetchImpl = shop(['/bacanie-carrefour/', '/tex/femei/rochii-si-fuste-de-seara/'])
+      await collect(new CarrefourScraper().discoverProducts({ log: testLogger(), fetchImpl, minIntervalMs: 0 }), 500)
+      const calls = callsOf(fetchImpl)
+      const lastGrocery = calls.map((u) => u.includes('/bacanie-carrefour/')).lastIndexOf(true)
+      const firstOther = calls.findIndex((u) => u.includes('/tex/'))
+      expect(lastGrocery).toBeGreaterThanOrEqual(0)
+      expect(firstOther).toBeGreaterThan(lastGrocery)
+    })
+
+    it('keeps reporting after a department outside groceries fails', async () => {
+      // What was already shown by a clothing department is positive evidence,
+      // and a department that fails later cannot make it grocery.
+      const excluded: string[] = []
+      const reasons: string[] = []
+      await collect(
+        new CarrefourScraper().discoverProducts({
+          log: testLogger(),
+          fetchImpl: shop(
+            ['/bacanie-carrefour/', '/tex/femei/', '/tex/barbati-si-baieti/'],
+            [{ match: '/tex/barbati-si-baieti/', body: 'no', status: 403 }],
+          ),
+          minIntervalMs: 0,
+          reportIncomplete: (reason: string) => reasons.push(reason),
+          reportExcluded: (id: string) => excluded.push(id),
+        }),
+        500,
+      )
+      expect(reasons.length, 'the failing department was noticed').toBeGreaterThan(0)
+      expect(excluded.length).toBeGreaterThan(0)
+    })
+
+    it('deletes nothing when a grocery department could not be read', async () => {
+      // It may hold the very products the clothing departments show.
+      const excluded: string[] = []
+      await collect(
+        new CarrefourScraper().discoverProducts({
+          log: testLogger(),
+          fetchImpl: shop(
+            ['/bacanie-carrefour/', '/bacanie-carrefour/lactate/', '/tex/femei/'],
+            [{ match: '/bacanie-carrefour/lactate/', body: 'no', status: 403 }],
+          ),
+          minIntervalMs: 0,
+          reportExcluded: (id: string) => excluded.push(id),
+        }),
+        500,
+      )
+      expect(excluded).toEqual([])
+    })
+
+    it('deletes nothing when the sitemap names no grocery department at all', async () => {
+      // Not a shop that stopped selling food: a renamed department tree. Every
+      // product would read as outside groceries, and all of them would go.
+      const excluded: string[] = []
+      const reasons: string[] = []
+      await collect(
+        new CarrefourScraper().discoverProducts({
+          log: testLogger(),
+          fetchImpl: shop(['/tex/femei/']),
+          minIntervalMs: 0,
+          reportIncomplete: (reason: string) => reasons.push(reason),
+          reportExcluded: (id: string) => excluded.push(id),
+        }),
+        500,
+      )
+      expect(excluded).toEqual([])
+      expect(reasons.join(' ')).toContain('grocery')
+    })
+
+    it('waits for each report, so a removal lands before the crawl moves on', async () => {
+      // The CLI hands a full batch to the database from inside the report. Not
+      // awaited, a job killed at its time limit would lose everything pending.
+      const excluded: string[] = []
+      await collect(
+        new CarrefourScraper().discoverProducts({
+          log: testLogger(),
+          fetchImpl: shop(['/bacanie-carrefour/', '/tex/femei/']),
+          minIntervalMs: 0,
+          reportExcluded: async (id: string) => {
+            await new Promise((resolve) => setTimeout(resolve, 0))
+            excluded.push(id)
+          },
+        }),
+        500,
+      )
+      expect(excluded.length).toBeGreaterThan(0)
     })
 
     it('reports nothing from a crawl that did not read every department', async () => {

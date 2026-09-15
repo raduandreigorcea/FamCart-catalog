@@ -47,9 +47,9 @@ jobs:
   # 24 products a request. Mega Image is 8,879 product pages, one request each,
   # and is the only one of the four whose sitemap dates its entries -- so after
   # the first full night it fetches what moved rather than all of them. All four
-  # crawl the whole shop, close as `completed`, and are therefore allowed to
+  # crawl the whole shop, and a run that closes as `completed` is allowed to
   # sweep -- which is the only path by which anything is ever marked as no longer
-  # sold.
+  # sold. Carrefour does not close that way yet; see the note at the end.
   full:
     name: ${{ matrix.retailer }}
     runs-on: ubuntu-latest
@@ -66,8 +66,9 @@ jobs:
     # Generous rather than tight: a job killed by a timeout leaves its run row
     # `running`, which the reaper in 007 has to clean up 12 hours later -- and
     # that reaper only runs when the NEXT run for some shop opens, so a stuck row
-    # sits on the dashboard until then. The crawls themselves are ~10 minutes,
-    # ~2.5 hours, ~40 minutes and ~2 hours.
+    # sits on the dashboard until then. Measured on 2026-09-15 the crawls take
+    # ~4 minutes, ~4.5 hours and ~1 hour, and Carrefour about eight, which does
+    # not fit.
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
@@ -102,11 +103,14 @@ jobs:
   # Carrefour used to live in its own job, cut into fourteen nightly slices,
   # because 85,119 product pages is about forty-five hours of polite fetching
   # against a six-hour ceiling. It reads department listings now -- twenty-four
-  # products per request instead of one -- so the whole shop takes about two
-  # hours and it belongs up there with the others.
+  # products per request instead of one -- which was estimated at two hours and
+  # measures about eight: the shop takes ~3.5 seconds a page, and 3,551
+  # departments is more than one job. So Carrefour is killed at the limit every
+  # night, and has never swept.
   #
-  # Which also gives it back the thing slicing had taken away: a run that has
-  # seen the whole shop is the only kind allowed to mark anything as no longer
-  # sold, and no slice ever qualified. The scraper checks its own coverage
-  # against the sitemap every night and refuses to conclude anything if the
+  # What it does do every night is remove what is not groceries: it reads the
+  # 545 grocery departments first, after which anything another department shows
+  # is known to be outside groceries and is removed as it is read. A killed job
+  # keeps every removal it made. The scraper also checks its own coverage
+  # against the sitemap and refuses to conclude anything from absence if the
   # departments accounted for less than 95% of it.

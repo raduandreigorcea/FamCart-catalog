@@ -114,9 +114,12 @@ export interface ScrapeContext {
    *
    * Report only what the shop's own department says. An id reported by mistake
    * is a product deleted, so a scraper that cannot tell yet -- Carrefour, until
-   * it has seen every department a product sits in -- must wait until it can.
+   * it has read every grocery department -- must wait until it can.
+   *
+   * AWAIT IT. The CLI hands a full batch to the database from inside this call,
+   * so a report left pending is a removal that dies with the process.
    */
-  reportExcluded?: (externalId: string) => void
+  reportExcluded?: (externalId: string) => unknown
   /** Somewhere to say what is happening. */
   log: Logger
   /**

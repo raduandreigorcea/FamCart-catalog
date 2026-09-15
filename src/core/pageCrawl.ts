@@ -186,9 +186,9 @@ export async function* crawlProductPages(
   let emitted = 0
   // Refused by URL and never fetched: accounted for, so part of coverage.
   let unread = 0
-  const excludeId = (url: string): void => {
+  const excludeId = async (url: string): Promise<void> => {
     const id = options.idOf?.(url)
-    if (id) ctx.reportExcluded?.(id)
+    if (id) await ctx.reportExcluded?.(id)
   }
   for (const entry of wanted) {
     if (ctx.signal?.aborted) return
@@ -196,7 +196,7 @@ export async function* crawlProductPages(
     if (options.skip?.(entry.loc)) {
       counters.excluded++
       unread++
-      excludeId(entry.loc)
+      await excludeId(entry.loc)
       continue
     }
 
@@ -233,7 +233,7 @@ export async function* crawlProductPages(
 
     if (options.keep && !options.keep(response.body, entry.loc)) {
       counters.excluded++
-      excludeId(entry.loc)
+      await excludeId(entry.loc)
       continue
     }
 
