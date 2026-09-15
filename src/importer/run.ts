@@ -12,6 +12,7 @@ import { createClient } from '@supabase/supabase-js'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { RetailerProduct, Logger } from '../core/types.ts'
 import { validate } from './validate.ts'
+import { isBundle } from '../core/bundles.ts'
 import type { ImportRow, RejectReason } from './validate.ts'
 
 /** Rows per catalog_import_listings call. Big enough to be cheap, small enough
@@ -130,6 +131,13 @@ export class ScrapeRun {
 
   /** Validate and buffer one product; flushes when the batch is full. */
   async add(product: RetailerProduct): Promise<void> {
+    // A gift set, or a product sold with glasses, a bag or a toy: excluded
+    // rather than imported, for every shop, and removed if an earlier run
+    // imported it. See core/bundles.ts for why this one rule reads the name.
+    if (isBundle(product.name)) {
+      await this.exclude(product.externalId)
+      return
+    }
     this.totals.found++
     const result = validate(product)
     if (!result.ok) {
