@@ -248,7 +248,7 @@ export class AuchanScraper implements RetailerScraper {
         // to reach the rest of the shop -- and is reported, so that what an
         // earlier run imported of it is removed.
         if (!isAuchanGrocery(raw.categories)) {
-          ctx.reportExcluded?.(id)
+          await ctx.reportExcluded?.(id)
           continue
         }
 

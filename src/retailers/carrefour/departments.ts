@@ -1,9 +1,10 @@
 // Walking Carrefour's departments, which is how the whole shop fits in one job.
 //
-// The sitemap holds two kinds of URL: 85,119 product pages, and 3,243
-// department pages. Reading the departments instead of the products is the
-// difference between forty-five hours and about two -- see listing.ts for why
-// that is possible at all, and what it costs in stability.
+// The sitemap holds two kinds of URL: 85,119 product pages, and 3,551
+// department pages (2026-09-15), 545 of them groceries. Reading the departments
+// instead of the products is the difference between forty-five hours and about
+// eight -- see listing.ts for why that is possible at all, and what it costs in
+// stability, and index.ts for why eight still does not fit in one job.
 //
 // PAGINATION IS NOT UNIFORM, and finding that out is what shaped this. A big
 // department pages properly: /bacanie-carrefour/?p=2 returns twenty-four
@@ -104,8 +105,14 @@ export async function* crawlDepartments(options: {
    * or a parent already did. Omitted, every department counts.
    */
   isGrocery?: (department: string) => boolean
-  /** Every product any department shows, grocery or not: the caller's coverage and exclusions. */
+  /** Every product any department shows, grocery or not: the caller's coverage. */
   onSeen?: (externalId: string) => void
+  /**
+   * Every product a department OUTSIDE groceries shows, awaited before the crawl
+   * reads on. The caller reports exclusions from it, and a report still pending
+   * when the job is killed is a removal lost.
+   */
+  onOutside?: (externalId: string) => void | Promise<void>
 }): AsyncGenerator<RetailerProduct> {
   const { http, ctx, departments, counters } = options
   const yielded = new Set<string>()
@@ -153,10 +160,14 @@ export async function* crawlDepartments(options: {
 
       for (const product of products) {
         options.onSeen?.(product.externalId)
+        if (!grocery) {
+          await options.onOutside?.(product.externalId)
+          continue
+        }
         // Deduplicated for OUTPUT only. Whether to turn another page is decided
         // below, from the page itself -- conflating the two is what stopped
         // every parent department on its first page.
-        if (!grocery || yielded.has(product.externalId)) continue
+        if (yielded.has(product.externalId)) continue
         yielded.add(product.externalId)
         counters.emitted++
         yield product

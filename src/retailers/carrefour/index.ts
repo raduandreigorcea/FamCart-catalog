@@ -132,11 +132,16 @@ export class CarrefourScraper implements RetailerScraper {
     }
 
     // THE DEPARTMENTS, NOT THE PRODUCTS. The same sitemap holds both: 85,119
-    // /produse/ pages and 3,243 department pages. Reading the departments gets
-    // twenty-four products per request instead of one, which is the difference
-    // between forty-five hours and about two -- so the whole shop fits in a
-    // single nightly job, and a run that has seen the whole shop is the only
-    // kind allowed to mark anything as no longer sold.
+    // /produse/ pages and, on 2026-09-15, 3,551 department pages. Reading the
+    // departments gets twenty-four products per request instead of one, which
+    // is the difference between forty-five hours and about eight.
+    //
+    // EIGHT, NOT THE TWO THIS ONCE SAID. Two assumed one request a second; the
+    // shop takes about three and a half to answer a department page, and the job
+    // is killed at five hours -- the run of 2026-09-12 had read 2,040 departments
+    // when it died. So no Carrefour run has finished, none has swept, and while
+    // exclusions waited for the end of the crawl none was ever made either. The
+    // groceries-first order below is what fixes the second.
     //
     // buildProduct() and the product-page parser stay, and stay tested. They are
     // the fallback if the analytics payload ever goes, and they are what the
@@ -152,11 +157,6 @@ export class CarrefourScraper implements RetailerScraper {
     const departments = entries
       .map((entry) => entry.loc)
       .filter((loc) => loc.startsWith(ORIGIN) && !isProduct(loc))
-      // Longest first, so the specific leaves are read before the parents that
-      // contain them. Same products either way -- they are deduplicated -- but
-      // this way a product's category comes from the narrowest department that
-      // claims it rather than from whichever happened to be crawled first.
-      .sort((a, b) => b.length - a.length)
 
     if (departments.length === 0) {
       // The sitemap answered and held no departments at all. Not an empty shop:
@@ -165,10 +165,34 @@ export class CarrefourScraper implements RetailerScraper {
       return
     }
 
+    // GROCERIES FIRST, which is what lets a crawl that never finishes still
+    // remove what it should. A product is groceries if ANY department shows it,
+    // so nothing may be called non-grocery while a grocery department is unread.
+    // Read every grocery department first and that is settled for the rest of
+    // the night: whatever the others show that the groceries did not is outside
+    // groceries, and is reported the moment it is read.
+    //
+    // The groceries go longest first, so the specific leaves are read before the
+    // parents that contain them and a product's category comes from the
+    // narrowest department that claims it. The rest go SHORTEST first: nothing
+    // from them is imported, so category does not matter, and a parent's pages
+    // hold what its leaves do -- so the parents reach most of the non-food shop
+    // before the job runs out of time, where the leaves would reach a corner.
+    const groceries = departments.filter(carrefourDepartmentIsGrocery).sort((a, b) => b.length - a.length)
+    const others = departments.filter((d) => !carrefourDepartmentIsGrocery(d)).sort((a, b) => a.length - b.length)
+
     ctx.log.info('carrefour: departments read', {
       departments: departments.length,
+      groceries: groceries.length,
       productUrlsIgnored: entries.length - departments.length,
     })
+
+    if (groceries.length === 0) {
+      // A renamed department tree, not a shop that stopped selling food. Carried
+      // on, every product would read as outside groceries and be deleted.
+      ctx.reportIncomplete?.('carrefour: the sitemap listed no grocery department')
+      return
+    }
 
     // THE CRAWL CHECKS ITS OWN COVERAGE, and this is the part that earns it the
     // right to sweep.
@@ -201,8 +225,10 @@ export class CarrefourScraper implements RetailerScraper {
     // about what the crawl accounted for -- and the ones it kept.
     const seen = new Set<string>()
     const kept = new Set<string>()
-    // Whether anything cut the crawl short, which decides whether the
-    // exclusions below may be reported at all.
+    // Reported as outside groceries, each once.
+    const reported = new Set<string>()
+    // Whether anything cut the crawl short. While the groceries are being read,
+    // that decides whether anything may be called outside groceries at all.
     let truncated = false
     const crawlCtx: ScrapeContext = {
       ...ctx,
@@ -215,16 +241,40 @@ export class CarrefourScraper implements RetailerScraper {
       for await (const product of crawlDepartments({
         http,
         ctx: crawlCtx,
-        departments,
+        departments: groceries,
         counters,
-        isGrocery: carrefourDepartmentIsGrocery,
         onSeen: (id) => seen.add(id),
       })) {
         kept.add(product.externalId)
         yield product
       }
+
+      // Past here every grocery department has been read whole, or the crawl
+      // ends. A limited or sliced run ends too: it has not read the groceries
+      // whole, and nothing it would read next can be imported.
+      if (truncated || ctx.limit || ctx.shard || ctx.signal?.aborted) return
+
+      // A department failing from here on still stops the run concluding
+      // anything from ABSENCE. It does not stop this: what a clothing department
+      // showed is positive evidence, whatever fails after it.
+      for await (const product of crawlDepartments({
+        http,
+        ctx: crawlCtx,
+        departments: others,
+        counters,
+        isGrocery: () => false,
+        onSeen: (id) => seen.add(id),
+        onOutside: async (id) => {
+          if (kept.has(id) || reported.has(id)) return
+          reported.add(id)
+          await ctx.reportExcluded?.(id)
+        },
+      })) {
+        // Never reached: a department outside groceries yields nothing.
+        yield product
+      }
     } finally {
-      ctx.log.info('carrefour: crawl finished', { ...counters })
+      ctx.log.info('carrefour: crawl finished', { ...counters, kept: kept.size, outsideGroceries: reported.size })
     }
 
     if (sitemapIds.size > 0 && !ctx.limit) {
@@ -252,21 +302,6 @@ export class CarrefourScraper implements RetailerScraper {
             `(${Math.round(ratio * 100)}%), below the 95% needed to conclude anything about the rest`,
         )
       }
-    }
-
-    // ONLY AFTER A WHOLE CRAWL. A product is groceries if ANY department shows
-    // it, and the departments arrive in no order that settles that early: a
-    // t-shirt-shaped promotion can be read before the grocery aisle holding the
-    // same product. So nothing is called non-grocery until every department has
-    // been read -- an exclusion from half a crawl would delete real groceries.
-    if (!truncated && !ctx.limit && !ctx.shard && !ctx.signal?.aborted) {
-      let excluded = 0
-      for (const id of seen) {
-        if (kept.has(id)) continue
-        excluded++
-        ctx.reportExcluded?.(id)
-      }
-      ctx.log.info('carrefour: outside groceries', { excluded, kept: kept.size })
     }
   }
 }

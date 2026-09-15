@@ -14,7 +14,7 @@
 import process from 'node:process'
 import { createLogger } from '../core/logger.ts'
 import { SCRAPERS, scraperFor, IMPLEMENTED } from '../core/registry.ts'
-import { ScrapeRun, connect } from '../importer/run.ts'
+import { ScrapeRun, connect, BATCH_SIZE } from '../importer/run.ts'
 import type { CatalogDb } from '../importer/run.ts'
 import type { RetailerScraper } from '../core/types.ts'
 import { loadEnvFiles } from './env.ts'
@@ -107,8 +107,11 @@ async function scrapeOne(
   // reported at all, the run falls back to the floor.
   let coverage: { seen: number; advertised: number } | null = null
 
-  // Reported synchronously by the scraper, handed to the importer between
-  // products, since removing them is a network call the generator cannot await.
+  // Reported by the scraper and handed to the importer: between products, and
+  // from inside the report itself once a batch has piled up. The second is for a
+  // crawl that reads for hours without yielding a product -- Carrefour's
+  // departments outside groceries -- which would otherwise hold every removal
+  // until its end, and lose all of them to a job killed at its time limit.
   const excluded: string[] = []
   const drainExcluded = async (): Promise<void> => {
     for (const id of excluded.splice(0)) await run.exclude(id)
@@ -132,6 +135,7 @@ async function scrapeOne(
       },
       reportExcluded: (id) => {
         excluded.push(id)
+        return excluded.length >= BATCH_SIZE ? drainExcluded() : undefined
       },
     })) {
       if (args.ndjson) process.stdout.write(JSON.stringify(product) + '\n')
