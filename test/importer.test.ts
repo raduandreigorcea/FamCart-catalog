@@ -273,6 +273,23 @@ describe('ScrapeRun', () => {
     expect(calls.some((c) => c.name === 'catalog_purge_listings')).toBe(true)
   })
 
+  it('excludes a gift set or a product sold with an object instead of importing it', async () => {
+    const { db, calls } = fakeDb({
+      ...OPEN,
+      catalog_import_listings: {},
+      catalog_purge_listings: { listings_deleted: 1, products_deleted: 1 },
+      catalog_run_complete: { status: 'completed' },
+    })
+    const run = new ScrapeRun(db, 'auchan', testLogger())
+    await run.open()
+    await run.add(product({ externalId: 'B1', name: 'Whisky Jim Beam White, 0.7 l + 2 pahare' }))
+    await run.complete()
+
+    expect(calls.some((c) => c.name === 'catalog_import_listings')).toBe(false)
+    expect(calls.find((c) => c.name === 'catalog_purge_listings')?.args.p_external_ids).toEqual(['B1'])
+    expect(run.totals).toMatchObject({ excluded: 1, found: 0 })
+  })
+
   it('removes nothing in a dry run, and still counts what it would', async () => {
     const { db, calls } = fakeDb()
     const run = new ScrapeRun(db, 'auchan', testLogger(), true)
