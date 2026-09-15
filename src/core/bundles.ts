@@ -18,14 +18,15 @@
 //     names that put the quantity last ("Gin Bombay + pahar, 47.5% alc., 0.7L").
 //
 // What it deliberately leaves alone: "2 x 2 l + Coca-Cola Zero" (two groceries),
-// "+/- 1 kg" and "6 luni+" (not a pack at all), "Men+Care" (a product line), a
-// carafe sold with cups (kitchenware, which is kept), and a bottle "+ Gift Box"
-// (packaging, not an object).
+// "+/- 1 kg" and "6 luni+" (not a pack at all), "Men+Care" (a product line), and
+// a carafe sold with cups (kitchenware, which is kept). A "Gift Box" is refused
+// like a gift set, by the owner's call on 2026-09-15: the plain product is the
+// one people put on a list.
 
 const fold = (value: string): string =>
   value.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
 
-const GIFT_SET = /\b(set|pachet|cutie|caseta)\s+(de\s+|pentru\s+)?cadou\b|\bgift\s*set\b/
+const GIFT_SET = /\b(set|pachet|cutie|caseta)\s+(de\s+|pentru\s+)?cadou\b|\bgift\s*(set|box)\b/
 
 const OBJECTS =
   'pahar|pahare|halba|halbe|geanta|tricou|sosete|carte|colorat|ceasca|cesti|farfuri|cana|cani|jucari|' +

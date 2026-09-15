@@ -22,6 +22,8 @@ describe('isBundle', () => {
     expect(isBundle('Set pentru cadou Adidas Ice Dive: Apa de toaleta, 100 ml + Gel de dus, 250 ml')).toBe(true)
     expect(isBundle('Set cadou 2 prosoape 50/80 cm + 3 lumanari')).toBe(true)
     expect(isBundle('Pachet pentru cadou Rom Havana Cuban, 35% 0.7 l + 2 Pahare')).toBe(true)
+    expect(isBundle('Vinars Divin Apriori Maestro 10 ani, Reserva XO, 40%, 0.7l + Gift Box')).toBe(true)
+    expect(isBundle('Lichior Pallini Limoncello Gift Box, 26% alcool, 0.7 l')).toBe(true)
   })
 
   it('keeps two groceries sold together, and names that only contain a plus', () => {
@@ -32,10 +34,9 @@ describe('isBundle', () => {
     expect(isBundle('Cana filtranta Brita Aluna, 2.4 l + 3 filtre Brita Maxtra Pro')).toBe(false)
   })
 
-  it('keeps kitchenware sold as a set, and a bottle in a gift box', () => {
+  it('keeps kitchenware sold as a set', () => {
     expect(isBundle('Carafa 1 l + 6 cani din ceramica, 150 ml')).toBe(false)
     expect(isBundle('Set carafa 1200 ml+6 pahare vin 260 ml Lav, Transparent')).toBe(false)
-    expect(isBundle('Vinars Divin Apriori Maestro 10 ani, Reserva XO, 40%, 0.7l + Gift Box')).toBe(false)
   })
 
   it('reads a name with diacritics the same as without', () => {
