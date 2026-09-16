@@ -95,7 +95,6 @@ export function buildDelhaizeProduct(product: JsonLdProduct, url: string): Retai
     quantity: parsed?.quantity ?? null,
     unit: parsed?.unit ?? null,
     category: DEPARTMENTS[department] ?? null,
-    imageUrl: httpsUrl(product.image),
     productUrl: httpsUrl(url) ?? url,
     available: isAvailable(product.availability),
   }

@@ -202,7 +202,6 @@ export function buildAldiProduct(
     quantity: parsed?.quantity ?? null,
     unit: parsed?.unit ?? null,
     category: shelf !== null ? (country.shelves[shelf] ?? null) : null,
-    imageUrl: httpsUrl(product.image),
     productUrl: httpsUrl(url) ?? url,
     available: isAvailable(product.availability),
   }

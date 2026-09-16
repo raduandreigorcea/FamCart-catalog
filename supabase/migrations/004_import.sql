@@ -13,7 +13,7 @@
 --     every rename and every price change. It is the only number here that came
 --     from a person.
 --   * A listing never renames its product. The first row to create a product
---     names it; later rows may fill BLANKS (a missing brand, image, quantity,
+--     names it; later rows may fill BLANKS (a missing brand, quantity,
 --     category) but may not overwrite a value that is already there. Otherwise
 --     whichever retailer scraped last would decide what everything is called,
 --     and the name would flap between runs.
@@ -50,7 +50,6 @@ declare
   v_quantity    numeric;
   v_unit        text;
   v_category    text;
-  v_image_url   text;
   v_product_url text;
   v_available   boolean;
 
@@ -98,7 +97,6 @@ begin
       v_currency    := nullif(btrim(upper(coalesce(v_row ->> 'currency', ''))), '');
       v_unit        := nullif(btrim(coalesce(v_row ->> 'unit', '')), '');
       v_category    := nullif(btrim(coalesce(v_row ->> 'category', '')), '');
-      v_image_url   := nullif(btrim(coalesce(v_row ->> 'image_url', '')), '');
       v_product_url := nullif(btrim(coalesce(v_row ->> 'product_url', '')), '');
       v_price       := case when v_row ? 'price'    and jsonb_typeof(v_row -> 'price')    = 'number'
                             then (v_row ->> 'price')::numeric end;
@@ -171,8 +169,8 @@ begin
       --    cosmetic problem, one row for two products is corrupt data.
       if v_product_id is null then
         insert into public.catalog_products
-          (canonical_name, brand, quantity, quantity_unit, category, image_url)
-        values (v_name, v_brand, v_quantity, v_unit, v_category, v_image_url)
+          (canonical_name, brand, quantity, quantity_unit, category)
+        values (v_name, v_brand, v_quantity, v_unit, v_category)
         returning id into v_product_id;
         v_created := v_created + 1;
       else
@@ -181,10 +179,9 @@ begin
            set brand         = coalesce(p.brand, v_brand),
                quantity      = case when p.quantity is null and v_unit is not null then v_quantity else p.quantity end,
                quantity_unit = case when p.quantity is null and v_unit is not null then v_unit     else p.quantity_unit end,
-               category      = coalesce(p.category, v_category),
-               image_url     = coalesce(p.image_url, v_image_url)
+               category      = coalesce(p.category, v_category)
          where p.id = v_product_id
-           and (p.brand is null or p.quantity is null or p.category is null or p.image_url is null);
+           and (p.brand is null or p.quantity is null or p.category is null);
       end if;
 
       -- ── the identifier ─────────────────────────────────────────────────────
@@ -217,11 +214,11 @@ begin
       if v_before.id is null then
         insert into public.catalog_listings (
           product_id, retailer_id, external_id, retailer_name, retailer_brand,
-          retailer_category, price, currency, available, product_url, image_url,
+          retailer_category, price, currency, available, product_url,
           last_price_at, first_seen_at, last_seen_at
         ) values (
           v_product_id, v_retailer_id, v_external_id, v_name, v_brand,
-          v_category, v_price, v_currency, v_available, v_product_url, v_image_url,
+          v_category, v_price, v_currency, v_available, v_product_url,
           case when v_price is not null then v_seen_at end, v_seen_at, v_seen_at
         );
         v_inserted := v_inserted + 1;
@@ -234,8 +231,7 @@ begin
           or v_before.price             is distinct from v_price
           or v_before.currency          is distinct from v_currency
           or v_before.available         is distinct from v_available
-          or v_before.product_url       is distinct from v_product_url
-          or v_before.image_url         is distinct from v_image_url;
+          or v_before.product_url       is distinct from v_product_url;
 
         update public.catalog_listings l
            set product_id        = v_product_id,
@@ -246,7 +242,6 @@ begin
                currency          = v_currency,
                available         = v_available,
                product_url       = v_product_url,
-               image_url         = v_image_url,
                -- previous_price only moves when the price actually moved, so it
                -- keeps meaning "what it cost before this change" rather than
                -- "what it cost during the previous run".

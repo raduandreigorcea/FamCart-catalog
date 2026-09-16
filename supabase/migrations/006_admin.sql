@@ -33,8 +33,7 @@ create or replace function public.catalog_admin_create_product(
   p_category      text    default null,
   p_quantity      numeric default null,
   p_quantity_unit text    default null,
-  p_barcode       text    default null,
-  p_image_url     text    default null
+  p_barcode       text    default null
 )
 returns uuid
 language plpgsql
@@ -70,9 +69,8 @@ begin
   end if;
 
   insert into public.catalog_products
-    (canonical_name, brand, category, quantity, quantity_unit, image_url)
-  values (p_name, nullif(btrim(coalesce(p_brand, '')), ''), p_category, p_quantity, p_quantity_unit,
-          nullif(btrim(coalesce(p_image_url, '')), ''))
+    (canonical_name, brand, category, quantity, quantity_unit)
+  values (p_name, nullif(btrim(coalesce(p_brand, '')), ''), p_category, p_quantity, p_quantity_unit)
   returning id into v_id;
 
   if p_barcode is not null then
@@ -84,13 +82,13 @@ begin
 end;
 $fn$;
 
-comment on function public.catalog_admin_create_product(text, text, text, numeric, text, text, text) is
+comment on function public.catalog_admin_create_product(text, text, text, numeric, text, text) is
   'Create a product by hand. It has no listing until a retailer is seen carrying it.';
 
 -- ─── update ──────────────────────────────────────────────────────────────────
 -- ONE CONVENTION: null leaves a column alone, '' clears it, anything else sets
 -- it. The dashboard submits every field of its form on every save, so without
--- that distinction correcting a name would clear the size and the image -- which
+-- that distinction correcting a name would clear the size -- which
 -- is a bug the previous version of this function actually shipped.
 create or replace function public.catalog_admin_update_product(
   p_id            uuid,
@@ -99,7 +97,6 @@ create or replace function public.catalog_admin_update_product(
   p_category      text    default null,
   p_quantity      numeric default null,
   p_quantity_unit text    default null,
-  p_image_url     text    default null,
   p_barcode       text    default null
 )
 returns void
@@ -146,9 +143,7 @@ begin
                                else p_category end,
          quantity       = case when p_quantity is null then quantity else p_quantity end,
          quantity_unit  = case when p_quantity_unit is null then quantity_unit
-                               else nullif(btrim(p_quantity_unit), '') end,
-         image_url      = case when p_image_url is null then image_url
-                               else nullif(btrim(p_image_url), '') end
+                               else nullif(btrim(p_quantity_unit), '') end
    where id = p_id;
 
   if p_barcode is not null then
@@ -166,7 +161,7 @@ begin
 end;
 $fn$;
 
-comment on function public.catalog_admin_update_product(uuid, text, text, text, numeric, text, text, text) is
+comment on function public.catalog_admin_update_product(uuid, text, text, text, numeric, text, text) is
   'Correct a product. null leaves a column alone, '''' clears it, anything else sets it.';
 
 -- ─── delete ──────────────────────────────────────────────────────────────────
@@ -198,10 +193,10 @@ comment on function public.catalog_admin_delete_product(uuid) is
 -- re-pushing 006 would put the counting body back. test/migrations.test.ts
 -- refuses a function defined in two files.
 
-revoke all on function public.catalog_admin_create_product(text, text, text, numeric, text, text, text) from public, anon;
-revoke all on function public.catalog_admin_update_product(uuid, text, text, text, numeric, text, text, text) from public, anon;
+revoke all on function public.catalog_admin_create_product(text, text, text, numeric, text, text) from public, anon;
+revoke all on function public.catalog_admin_update_product(uuid, text, text, text, numeric, text, text) from public, anon;
 revoke all on function public.catalog_admin_delete_product(uuid) from public, anon;
 
-grant execute on function public.catalog_admin_create_product(text, text, text, numeric, text, text, text) to authenticated;
-grant execute on function public.catalog_admin_update_product(uuid, text, text, text, numeric, text, text, text) to authenticated;
+grant execute on function public.catalog_admin_create_product(text, text, text, numeric, text, text) to authenticated;
+grant execute on function public.catalog_admin_update_product(uuid, text, text, text, numeric, text, text) to authenticated;
 grant execute on function public.catalog_admin_delete_product(uuid) to authenticated;

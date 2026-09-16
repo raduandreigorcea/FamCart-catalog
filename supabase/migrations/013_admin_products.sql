@@ -29,7 +29,6 @@ create or replace function public.catalog_admin_products(
   p_category     text        default null,
   p_has_barcode  boolean     default null,
   p_has_brand    boolean     default null,
-  p_has_image    boolean     default null,
   p_has_quantity boolean     default null,
   p_has_listing  boolean     default null,
   p_available    boolean     default null,
@@ -45,7 +44,6 @@ returns table (
   category       text,
   quantity       numeric,
   quantity_unit  text,
-  image_url      text,
   add_count      integer,
   listing_count  integer,
   popularity     integer,
@@ -97,7 +95,6 @@ begin
      where (v_query is null or p.search_blob like '%' || public.catalog_like_escape(v_query) || '%')
        and (p_category     is null or p.category = p_category)
        and (p_has_brand    is null or (p.brand is not null) = p_has_brand)
-       and (p_has_image    is null or (p.image_url is not null) = p_has_image)
        and (p_has_quantity is null or (p.quantity is not null) = p_has_quantity)
        and (p_has_listing  is null or (p.listing_count > 0) = p_has_listing)
        and (p_earned       is null or (p.add_count > 0) = p_earned)
@@ -126,7 +123,7 @@ begin
      limit v_limit offset v_offset
   )
   select p.id, p.canonical_name, p.brand, p.category, p.quantity, p.quantity_unit,
-         p.image_url, p.add_count, p.listing_count, p.popularity,
+         p.add_count, p.listing_count, p.popularity,
          coalesce(fx.retailers, '{}'::text[]), coalesce(c.barcodes, '{}'::text[]),
          fx.min_price, fx.currency, fx.available,
          p.merge_key, p.first_seen_at,
@@ -152,8 +149,8 @@ begin
 end;
 $fn$;
 
-comment on function public.catalog_admin_products(text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, boolean, timestamptz, integer, integer) is
+comment on function public.catalog_admin_products(text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, timestamptz, integer, integer) is
   'Admin browse over products, with their listings folded in. total_count follows the filter, not the table.';
 
-revoke all on function public.catalog_admin_products(text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, boolean, timestamptz, integer, integer) from public, anon;
-grant execute on function public.catalog_admin_products(text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, boolean, timestamptz, integer, integer) to authenticated;
+revoke all on function public.catalog_admin_products(text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, timestamptz, integer, integer) from public, anon;
+grant execute on function public.catalog_admin_products(text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, timestamptz, integer, integer) to authenticated;

@@ -130,18 +130,20 @@ select is(
   1, 'a different SIZE is a different product, however alike the names read');
 
 -- ─── blanks fill, values do not ──────────────────────────────────────────────
-select is((select image_url from public.catalog_products where add_count = 7), null,
-  'the product has no image yet');
+-- The C2 row above carried no category, so the product it created has none.
+-- A later listing offering one fills it; nothing that is already set is touched,
+-- which is what stops the last scraper to finish deciding what everything is.
+select is((select category from public.catalog_products where canonical_name like 'Lapte de consum%'), null,
+  'the product has no category yet');
 select is(
   (public.catalog_import_listings($j$[
-    {"external_id":"C1","name":"Apă minerală plată Dorna, 2 litri","brand":"Dorna","gtin":"5941234567890",
-     "price":4.79,"currency":"RON","quantity":2,"unit":"l",
-     "image_url":"https://cdn.carrefour.ro/dorna.jpg",
-     "product_url":"https://carrefour.ro/produse/c1","available":true}
+    {"external_id":"C2","name":"Lapte de consum Zuzu 1,5% grasime 1 L","brand":"Zuzu",
+     "price":8.99,"currency":"RON","quantity":1,"unit":"l","category":"dairy",
+     "product_url":"https://carrefour.ro/produse/c2","available":true}
   ]$j$::jsonb, 'carrefour') ->> 'products_created')::int,
-  0, 'a later listing carrying an image does not create a product');
-select is((select image_url from public.catalog_products where add_count = 7),
-  'https://cdn.carrefour.ro/dorna.jpg', 'and a BLANK is filled from it');
+  0, 'a later listing carrying a category does not create a product');
+select is((select category from public.catalog_products where canonical_name like 'Lapte de consum%'),
+  'dairy', 'and a BLANK is filled from it');
 
 -- ─── a GTIN that already belongs to somebody else ────────────────────────────
 -- A row carrying a barcode owned by a DIFFERENT product cannot arise from the

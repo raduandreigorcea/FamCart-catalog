@@ -1,7 +1,7 @@
 -- What the shape of the catalog guarantees, independent of anything that writes
 -- to it. If a claim in 002 is load-bearing, it is asserted here.
 begin;
-select plan(44);
+select plan(43);
 
 -- Every suite starts from an empty catalog rather than assuming one. `db reset`
 -- leaves the three retailer rows from 002 in place and nothing else, but these
@@ -95,10 +95,6 @@ select throws_ok(
 select throws_ok(
   $$insert into public.catalog_products (canonical_name, quantity, quantity_unit) values ('X', 5, 'furlong')$$,
   '23514', null, 'the unit vocabulary is closed');
-
-select throws_ok(
-  $$insert into public.catalog_products (canonical_name, image_url) values ('X', 'http://insecure/x.jpg')$$,
-  '23514', null, 'an image must be https');
 
 select throws_ok(
   $$insert into public.catalog_retailers (slug, name, country, domain)

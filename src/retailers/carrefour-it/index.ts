@@ -112,7 +112,6 @@ export function buildCarrefourItProduct(
     quantity: parsed?.quantity ?? null,
     unit: parsed?.unit ?? null,
     category: shelf.aisle !== null ? (AISLES[shelf.aisle] ?? null) : null,
-    imageUrl: httpsUrl(product.image),
     productUrl: httpsUrl(url) ?? url,
     available: isAvailable(product.availability),
   }
