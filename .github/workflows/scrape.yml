@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       retailer:
-        description: 'Which shop (auchan, carrefour, lidl, mega-image, all)'
+        description: 'Which shop (a slug, or: all, abroad)'
         required: true
         default: all
 
@@ -94,6 +94,78 @@ jobs:
         if: >-
           github.event_name == 'schedule'
           || github.event.inputs.retailer == 'all'
+          || github.event.inputs.retailer == matrix.retailer
+        env:
+          CATALOG_SUPABASE_URL: ${{ secrets.CATALOG_SUPABASE_URL }}
+          CATALOG_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CATALOG_SUPABASE_SERVICE_ROLE_KEY }}
+        run: npm run scrape -- ${{ matrix.retailer }}
+
+  # ─── the shops abroad ───────────────────────────────────────────────────────
+  # A SECOND JOB RATHER THAN MORE ROWS IN THE MATRIX ABOVE, and the reason is
+  # `max-parallel: 1`. The Romanian chain measured ~9 hours on 2026-09-16 --
+  # Mega Image 4.5, Carrefour's 5-hour ceiling, the rest -- so eighteen more
+  # shops appended to it would not be reached before the next night started
+  # them again from the top. Lidl Romania would run every night and Delhaize
+  # never, and nothing would say so: a shop that is never reached looks exactly
+  # like a shop with nothing to report.
+  #
+  # PARALLEL HERE, SEQUENTIAL THERE, and that is not an inconsistency. The
+  # reasons for one-at-a-time above are about reading the result -- one run row
+  # in flight, one shop's failure not confusing another's -- and they cost
+  # nothing when four shops take nine hours. Eighteen shops on eighteen
+  # different hosts is where that price becomes the whole assortment. Politeness
+  # is unaffected either way: the rate limit and the circuit breaker in
+  # core/http.ts are per HOST, and no two of these share one.
+  #
+  # Five at a time, not eighteen: the free plan allows 20 concurrent jobs across
+  # the account, and the chain above is already holding one.
+  #
+  # NONE OF THESE HAS EVER RUN AGAINST THE LIVE SITE. Every fixture was captured
+  # by hand and every test runs off it, so the first scheduled run is the first
+  # real evidence. What that can cost is bounded on purpose: a run that finds
+  # nothing is refused, a first run has no previous run to compare against and
+  # so may not sweep, and an import only ever says "I saw this, now".
+  abroad:
+    name: ${{ matrix.retailer }}
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 5
+      fail-fast: false
+      matrix:
+        retailer:
+          - lidl-it
+          - lidl-de
+          - lidl-at
+          - lidl-ch
+          - lidl-es
+          - lidl-fr
+          - lidl-be
+          - lidl-gb
+          - lidl-ie
+          - aldi-de
+          - hofer
+          - aldi-ch
+          - aldi-it
+          - aldi-gb
+          - aldi-ie
+          - carrefour-it
+          - mpreis
+          - delhaize
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # The same step-level filter as above, and for the same reason: a
+      # job-level `if` cannot see `matrix.retailer`.
+      - name: Scrape ${{ matrix.retailer }}
+        if: >-
+          github.event_name == 'schedule'
+          || github.event.inputs.retailer == 'all'
+          || github.event.inputs.retailer == 'abroad'
           || github.event.inputs.retailer == matrix.retailer
         env:
           CATALOG_SUPABASE_URL: ${{ secrets.CATALOG_SUPABASE_URL }}
