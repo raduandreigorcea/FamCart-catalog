@@ -149,8 +149,8 @@ begin
 end;
 $fn$;
 
-comment on function public.catalog_admin_products(text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, boolean, timestamptz, integer, integer) is
+comment on function public.catalog_admin_products(text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, timestamptz, integer, integer) is
   'Admin browse over products, with their listings folded in. total_count follows the filter, not the table.';
 
-revoke all on function public.catalog_admin_products(text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, boolean, timestamptz, integer, integer) from public, anon;
-grant execute on function public.catalog_admin_products(text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, boolean, timestamptz, integer, integer) to authenticated;
+revoke all on function public.catalog_admin_products(text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, timestamptz, integer, integer) from public, anon;
+grant execute on function public.catalog_admin_products(text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, timestamptz, integer, integer) to authenticated;

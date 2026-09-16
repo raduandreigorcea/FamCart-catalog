@@ -82,7 +82,7 @@ begin
 end;
 $fn$;
 
-comment on function public.catalog_admin_create_product(text, text, text, numeric, text, text, text) is
+comment on function public.catalog_admin_create_product(text, text, text, numeric, text, text) is
   'Create a product by hand. It has no listing until a retailer is seen carrying it.';
 
 -- ─── update ──────────────────────────────────────────────────────────────────
@@ -161,7 +161,7 @@ begin
 end;
 $fn$;
 
-comment on function public.catalog_admin_update_product(uuid, text, text, text, numeric, text, text, text) is
+comment on function public.catalog_admin_update_product(uuid, text, text, text, numeric, text, text) is
   'Correct a product. null leaves a column alone, '''' clears it, anything else sets it.';
 
 -- ─── delete ──────────────────────────────────────────────────────────────────
@@ -193,10 +193,10 @@ comment on function public.catalog_admin_delete_product(uuid) is
 -- re-pushing 006 would put the counting body back. test/migrations.test.ts
 -- refuses a function defined in two files.
 
-revoke all on function public.catalog_admin_create_product(text, text, text, numeric, text, text, text) from public, anon;
-revoke all on function public.catalog_admin_update_product(uuid, text, text, text, numeric, text, text, text) from public, anon;
+revoke all on function public.catalog_admin_create_product(text, text, text, numeric, text, text) from public, anon;
+revoke all on function public.catalog_admin_update_product(uuid, text, text, text, numeric, text, text) from public, anon;
 revoke all on function public.catalog_admin_delete_product(uuid) from public, anon;
 
-grant execute on function public.catalog_admin_create_product(text, text, text, numeric, text, text, text) to authenticated;
-grant execute on function public.catalog_admin_update_product(uuid, text, text, text, numeric, text, text, text) to authenticated;
+grant execute on function public.catalog_admin_create_product(text, text, text, numeric, text, text) to authenticated;
+grant execute on function public.catalog_admin_update_product(uuid, text, text, text, numeric, text, text) to authenticated;
 grant execute on function public.catalog_admin_delete_product(uuid) to authenticated;
