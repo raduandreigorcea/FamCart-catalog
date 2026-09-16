@@ -31,7 +31,7 @@
 // deletes itself. That is the same machinery that already caught Lidl halving.
 
 import type { RetailerProduct, Category } from '../../core/types.ts'
-import { parseQuantity, httpsUrl, usableBrand } from '../../core/normalize.ts'
+import { parseQuantity, usableBrand } from '../../core/normalize.ts'
 
 /** One product as the department page's own analytics describes it. */
 export interface Impression {
@@ -80,26 +80,6 @@ export function parseImpressions(html: string): Impression[] | null {
   return null
 }
 
-/**
- * The product images, keyed by the id in their filename.
- *
- *   .../cache/aac64a.../1/0/10510721_2_.webp
- *                           ^^^^^^^^
- *
- * Lazy-loaded, so they sit in data-src rather than src. Keyed by filename
- * rather than by document order on purpose: order ties an image to a position
- * in the markup, and a single extra tile -- a promotion, a sponsored slot --
- * would shift every product's picture by one without anything failing.
- */
-export function imagesById(html: string): Map<string, string> {
-  const found = new Map<string, string>()
-  for (const match of html.matchAll(/data-(?:src|original)="(https:\/\/[^"]+?\/(\d{4,})_[^"/]*\.(?:webp|jpg|jpeg|png))"/gi)) {
-    const [, url, id] = match
-    if (!found.has(id)) found.set(id, url)
-  }
-  return found
-}
-
 // The shop's own department names, folded onto the catalog's seventeen. Read
 // from the payload rather than guessed from a URL, so "Bacanie & Lichide" is
 // the shop telling us where the product sits rather than us inferring it.
@@ -144,10 +124,7 @@ export function categoryFromLabel(label: string | null | undefined): Category | 
 }
 
 /** One impression, as the catalog wants it. Null when it is not a usable row. */
-export function buildFromImpression(
-  row: Impression,
-  images: Map<string, string>,
-): RetailerProduct | null {
+export function buildFromImpression(row: Impression): RetailerProduct | null {
   const name = String(row.name ?? '').trim()
   const externalId = String(row.id ?? '').trim()
   if (!name || !/^\d{4,}$/.test(externalId)) return null
@@ -168,7 +145,6 @@ export function buildFromImpression(
     quantity: parsed?.quantity ?? null,
     unit: parsed?.unit ?? null,
     category: categoryFromLabel(row.category),
-    imageUrl: httpsUrl(images.get(externalId) ?? null),
     // The canonical product URL is not in the payload, and guessing the slug
     // would produce a URL that 404s. The id is what the listing is keyed on
     // anyway, and this form is the one the site itself redirects from.
@@ -184,6 +160,5 @@ export function buildFromImpression(
 export function parseListingPage(html: string): RetailerProduct[] | null {
   const rows = parseImpressions(html)
   if (rows === null) return null
-  const images = imagesById(html)
-  return rows.map((row) => buildFromImpression(row, images)).filter((p): p is RetailerProduct => p !== null)
+  return rows.map((row) => buildFromImpression(row)).filter((p): p is RetailerProduct => p !== null)
 }

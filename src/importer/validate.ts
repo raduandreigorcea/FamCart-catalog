@@ -32,7 +32,6 @@ export interface ImportRow {
   quantity: number | null
   unit: string | null
   category: string | null
-  image_url: string | null
   product_url: string
   available: boolean
 }
@@ -90,7 +89,6 @@ export function validate(product: RetailerProduct): Validated {
       quantity,
       unit: quantity === null ? null : (product.unit as string),
       category: isCategory(product.category) ? product.category : null,
-      image_url: httpsUrl(product.imageUrl, 1000),
       product_url: productUrl,
       available: product.available !== false,
     },

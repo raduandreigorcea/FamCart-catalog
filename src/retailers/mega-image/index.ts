@@ -142,7 +142,6 @@ export function buildProduct(product: JsonLdProduct, url: string): RetailerProdu
     quantity: parsed?.quantity ?? null,
     unit: parsed?.unit ?? null,
     category: categoryFromPath(url),
-    imageUrl: httpsUrl(product.image),
     productUrl: httpsUrl(url) ?? url,
     available: isAvailable(product.availability),
   }

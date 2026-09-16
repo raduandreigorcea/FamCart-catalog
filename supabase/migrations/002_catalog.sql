@@ -239,7 +239,6 @@ create table if not exists public.catalog_products (
   quantity       numeric,
   quantity_unit  text,
   category       text,
-  image_url      text,
   merge_key      text not null default '',
   search_blob    text not null default '',
   add_count      integer not null default 0,
@@ -280,10 +279,6 @@ alter table public.catalog_products add constraint catalog_products_category_che
     'drinks', 'alcohol', 'baby', 'household', 'personal-care', 'health', 'pet',
     'home', 'other'
   ));
-
-alter table public.catalog_products drop constraint if exists catalog_products_image_url_check;
-alter table public.catalog_products add constraint catalog_products_image_url_check
-  check (image_url is null or (image_url ~ '^https://' and char_length(image_url) <= 500));
 
 alter table public.catalog_products drop constraint if exists catalog_products_counts_check;
 alter table public.catalog_products add constraint catalog_products_counts_check
@@ -363,7 +358,6 @@ create table if not exists public.catalog_listings (
   currency          text,
   available         boolean not null default true,
   product_url       text not null,
-  image_url         text,
   previous_price    numeric(12, 2),
   last_price_at     timestamptz,
   first_seen_at     timestamptz not null default now(),
@@ -404,10 +398,6 @@ alter table public.catalog_listings add constraint catalog_listings_price_curren
 alter table public.catalog_listings drop constraint if exists catalog_listings_url_check;
 alter table public.catalog_listings add constraint catalog_listings_url_check
   check (product_url ~ '^https://' and char_length(product_url) <= 1000);
-
-alter table public.catalog_listings drop constraint if exists catalog_listings_image_check;
-alter table public.catalog_listings add constraint catalog_listings_image_check
-  check (image_url is null or (image_url ~ '^https://' and char_length(image_url) <= 1000));
 
 create index if not exists catalog_listings_product on public.catalog_listings (product_id);
 -- The sweep's index: "everything this retailer has not been seen with since X".

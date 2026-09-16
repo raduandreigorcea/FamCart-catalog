@@ -24,7 +24,6 @@ function product(overrides: Partial<RetailerProduct> = {}): RetailerProduct {
     quantity: 2,
     unit: 'l',
     category: 'drinks',
-    imageUrl: 'https://cdn.test/a.jpg',
     productUrl: 'https://www.auchan.ro/p/a1',
     available: true,
     ...overrides,

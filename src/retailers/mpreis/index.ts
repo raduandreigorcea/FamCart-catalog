@@ -96,7 +96,6 @@ export function buildMpreisProduct(product: JsonLdProduct, url: string, shelf: s
     quantity: parsed?.quantity ?? null,
     unit: parsed?.unit ?? null,
     category: shelf !== null ? (SHELVES[shelf] ?? null) : null,
-    imageUrl: httpsUrl(product.image),
     productUrl: httpsUrl(url) ?? url,
     available: isAvailable(product.availability),
   }

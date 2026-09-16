@@ -60,7 +60,6 @@ export interface RetailerProduct {
   quantity?: number | null
   unit?: Unit | null
   category?: Category | null
-  imageUrl?: string | null
   productUrl: string
   available: boolean
 }

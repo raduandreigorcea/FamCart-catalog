@@ -33,7 +33,6 @@ export interface VtexItem {
   referenceId?: Array<{ Key?: string; Value?: string }>
   measurementUnit?: string
   unitMultiplier?: number
-  images?: Array<{ imageUrl?: string }>
   sellers?: VtexSeller[]
 }
 
@@ -157,7 +156,6 @@ export function toRetailerProduct(product: VtexProduct, retailer = 'auchan'): Re
     quantity: parsed?.quantity ?? null,
     unit: parsed?.unit ?? null,
     category: categoryOf(product.categories),
-    imageUrl: httpsUrl(item?.images?.[0]?.imageUrl),
     productUrl: url,
     // AvailableQuantity is 99999 for anything in stock and 0 for anything not,
     // so it is a boolean wearing a number's clothes.

@@ -178,7 +178,6 @@ export function buildProduct(
     quantity: parsed?.quantity ?? null,
     unit: parsed?.unit ?? null,
     category: country.country === 'RO' ? categoryFromSlug(url) : null,
-    imageUrl: httpsUrl(product.image),
     productUrl: httpsUrl(url) ?? url,
     available: isAvailable(product.availability),
   }

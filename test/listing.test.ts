@@ -12,7 +12,6 @@ import { describe, it, expect } from 'vitest'
 import { readFixture } from './helpers.ts'
 import {
   parseImpressions,
-  imagesById,
   parseListingPage,
   categoryFromLabel,
   buildFromImpression,
@@ -54,28 +53,6 @@ describe('the analytics payload', () => {
   })
 })
 
-describe('images', () => {
-  it('keys a picture to the product id in its filename, not to its position', () => {
-    // Order would tie an image to a place in the markup, and one extra tile --
-    // a promotion, a sponsored slot -- would shift every product's picture by
-    // one. Nothing would fail; every row would simply be wrong.
-    const images = imagesById(paged)
-    const rows = parseImpressions(paged)!
-    expect(images.size).toBeGreaterThan(0)
-    const url = images.get(rows[0].id)
-    expect(url, 'first product has its own image').toBeTruthy()
-    expect(url).toContain(rows[0].id)
-  })
-
-  it('leaves a product with no image rather than borrowing one', () => {
-    const product = buildFromImpression(
-      { id: '99999999', name: 'Ceva', price: 1 },
-      new Map([['11111111', 'https://x.test/11111111_1_.webp']]),
-    )
-    expect(product!.imageUrl).toBeNull()
-  })
-})
-
 describe('the whole page', () => {
   it('turns a department into listings', () => {
     const products = parseListingPage(paged)!
@@ -107,18 +84,18 @@ describe('the whole page', () => {
   it('treats anything but "available" as off the shelf', () => {
     // Absence never deletes anything -- it only stops a listing being offered --
     // so the cautious reading is the safe one here.
-    const yes = buildFromImpression({ id: '1234', name: 'A', dimension10: 'available' }, new Map())
-    const no = buildFromImpression({ id: '1234', name: 'A', dimension10: 'outOfStock' }, new Map())
-    const unknown = buildFromImpression({ id: '1234', name: 'A' }, new Map())
+    const yes = buildFromImpression({ id: '1234', name: 'A', dimension10: 'available' })
+    const no = buildFromImpression({ id: '1234', name: 'A', dimension10: 'outOfStock' })
+    const unknown = buildFromImpression({ id: '1234', name: 'A' })
     expect(yes!.available).toBe(true)
     expect(no!.available).toBe(false)
     expect(unknown!.available).toBe(false)
   })
 
   it('drops a row with no usable id or name rather than inventing one', () => {
-    expect(buildFromImpression({ id: '', name: 'A' }, new Map())).toBeNull()
-    expect(buildFromImpression({ id: 'abc', name: 'A' }, new Map())).toBeNull()
-    expect(buildFromImpression({ id: '1234', name: '  ' }, new Map())).toBeNull()
+    expect(buildFromImpression({ id: '', name: 'A' })).toBeNull()
+    expect(buildFromImpression({ id: 'abc', name: 'A' })).toBeNull()
+    expect(buildFromImpression({ id: '1234', name: '  ' })).toBeNull()
   })
 
   it('says null for a page it could not read, so a crawl cannot count it as empty', () => {

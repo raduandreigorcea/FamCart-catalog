@@ -1,7 +1,7 @@
 -- The admin surface. Two things worth testing: that every door is locked, and
 -- that the filters narrow the thing they claim to narrow.
 begin;
-select plan(28);
+select plan(27);
 
 delete from public.catalog_scrape_runs;
 delete from public.catalog_listings;
@@ -12,7 +12,6 @@ delete from public.catalog_admins;
 select public.catalog_import_listings($j$[
   {"external_id":"A1","name":"Apa plata Dorna 2L","brand":"Dorna","gtin":"5941234567890",
    "price":4.99,"currency":"RON","quantity":2,"unit":"l","category":"drinks",
-   "image_url":"https://cdn.auchan.ro/a1.jpg",
    "product_url":"https://www.auchan.ro/p/a1","available":true},
   {"external_id":"A2","name":"Lapte Zuzu 1L","brand":"Zuzu","price":8.49,"currency":"RON",
    "quantity":1,"unit":"l","category":"dairy","product_url":"https://www.auchan.ro/p/a2","available":false},
@@ -59,8 +58,6 @@ select is((select count(*)::int from public.catalog_admin_products(p_has_barcode
   'p_has_barcode false finds the products with no code');
 select is((select count(*)::int from public.catalog_admin_products(p_has_brand := false)), 1,
   'p_has_brand false finds the unbranded one');
-select is((select count(*)::int from public.catalog_admin_products(p_has_image := true)), 1,
-  'p_has_image true finds the one with a picture');
 select is((select count(*)::int from public.catalog_admin_products(p_category := 'dairy')), 1,
   'p_category narrows to a shelf');
 select is((select count(*)::int from public.catalog_admin_products(p_available := false)), 0,
