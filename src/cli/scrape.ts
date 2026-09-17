@@ -31,6 +31,8 @@ interface Args {
   shard?: { index: number; of: number }
   /** Carrefour's cleanup: read only what may be removed (see the scraper). */
   removalsOnly: boolean
+  /** Carrefour's nightly run: the grocery departments only (see the scraper). */
+  groceriesOnly: boolean
   /** The grocery pass to trust: listings seen since then are groceries. */
   groceriesSince?: Date
 }
@@ -84,8 +86,17 @@ function parseArgs(argv: string[]): Args {
     throw new Error('--removals-only is for Carrefour alone: no other shop needs it')
   }
 
+  const groceriesOnly = argv.includes('--groceries-only')
+  if (groceriesOnly && positional[0] !== 'carrefour') {
+    throw new Error('--groceries-only is for Carrefour alone: no other shop needs it')
+  }
+  if (groceriesOnly && removalsOnly) {
+    throw new Error('--groceries-only and --removals-only read opposite halves; pick one')
+  }
+
   return {
     removalsOnly,
+    groceriesOnly,
     groceriesSince,
     target: positional[0] ?? 'all',
     dryRun: argv.includes('--dry-run'),
@@ -171,6 +182,7 @@ async function scrapeOne(
       log,
       signal: controller.signal,
       removalsOnly,
+      groceriesOnly: args.groceriesOnly,
       reportIncomplete: (reason) => {
         incomplete ??= reason
       },
@@ -229,7 +241,9 @@ async function scrapeOne(
     // had to remember at 2am. A limited run against the real catalog would have
     // completed, cleared the floor easily, and marked everything it did not
     // reach as no longer sold.
-    const deliberate = args.removalsOnly
+    const deliberate = args.groceriesOnly
+      ? 'groceries only, by design: the departments outside groceries hold nothing to import'
+      : args.removalsOnly
       ? `removals only${args.shard ? `, slice ${args.shard.index + 1}/${args.shard.of}` : ''}: trusted the grocery pass of ${args.groceriesSince?.toISOString()}`
       : args.shard
       ? `--shard ${args.shard.index + 1}/${args.shard.of}: one slice of the shop, by design`

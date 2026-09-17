@@ -297,6 +297,13 @@ export class CarrefourScraper implements RetailerScraper {
       // whole, and nothing it would read next can be imported.
       if (truncated || ctx.limit || ctx.shard || ctx.signal?.aborted) return
 
+      // GROCERIES ONLY, the nightly run since 2026-09-17. What the other
+      // departments show was removed once, by a removals-only run, and nothing
+      // of that kind can come back: a run only imports what a grocery department
+      // shows. Reading them every night found nothing new and cost the job its
+      // five hours, so every Carrefour run ended killed and red.
+      if (ctx.groceriesOnly) return
+
       // A department failing from here on still stops the run concluding
       // anything from ABSENCE. It does not stop this: what a clothing department
       // showed is positive evidence, whatever fails after it.
@@ -321,7 +328,9 @@ export class CarrefourScraper implements RetailerScraper {
       ctx.log.info('carrefour: crawl finished', { ...counters, kept: kept.size, outsideGroceries: reported.size })
     }
 
-    if (sitemapIds.size > 0 && !ctx.limit) {
+    // A groceries-only run reads a quarter of the sitemap's products on purpose;
+    // measured against the whole sitemap it would always read as incomplete.
+    if (sitemapIds.size > 0 && !ctx.limit && !ctx.groceriesOnly) {
       let covered = 0
       for (const id of sitemapIds) if (seen.has(id)) covered++
       const ratio = covered / sitemapIds.size

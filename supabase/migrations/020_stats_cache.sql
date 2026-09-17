@@ -186,7 +186,10 @@ begin
                    s.products_rejected, s.inserted, s.updated, s.unchanged,
                    s.marked_unavailable, s.error_count, s.error,
                    -- 022's sign of life, so Health can name a crawl that went quiet.
-                   s.last_alive_at
+                   s.last_alive_at,
+                   -- Whether a partial run was partial on purpose (stats.deliberate):
+                   -- a nightly groceries-only Carrefour run is not a problem.
+                   s.stats
               from public.catalog_scrape_runs s
              where s.retailer_id = r.id
              order by s.started_at desc limit 1

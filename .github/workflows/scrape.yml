@@ -63,13 +63,16 @@ jobs:
       fail-fast: false
       matrix:
         retailer: [lidl, mega-image, auchan, carrefour]
+    # SIX HOURS, GitHub's ceiling for a hosted job, since 2026-09-17: Carrefour's
+    # grocery pass alone measured 4 h 41 min, too close to the five it had.
+    #
     # Generous rather than tight: a job killed by a timeout leaves its run row
     # `running`, which the reaper in 007 has to clean up 12 hours later -- and
     # that reaper only runs when the NEXT run for some shop opens, so a stuck row
     # sits on the dashboard until then. Measured on 2026-09-15 the crawls take
     # ~4 minutes, ~4.5 hours and ~1 hour, and Carrefour about eight, which does
     # not fit.
-    timeout-minutes: 300
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -98,7 +101,11 @@ jobs:
         env:
           CATALOG_SUPABASE_URL: ${{ secrets.CATALOG_SUPABASE_URL }}
           CATALOG_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CATALOG_SUPABASE_SERVICE_ROLE_KEY }}
-        run: npm run scrape -- ${{ matrix.retailer }}
+          # Carrefour reads its grocery departments only: the rest holds nothing
+          # to import, and reading it every night got the job killed at its limit.
+          # The run closes as a deliberate partial, which no dashboard flags.
+          SCRAPE_MODE: ${{ matrix.retailer == 'carrefour' && '--groceries-only' || '' }}
+        run: npm run scrape -- ${{ matrix.retailer }} $SCRAPE_MODE
 
   # ─── the shops abroad ───────────────────────────────────────────────────────
   # A SECOND JOB RATHER THAN MORE ROWS IN THE MATRIX ABOVE, and the reason is
@@ -175,14 +182,14 @@ jobs:
   # Carrefour used to live in its own job, cut into fourteen nightly slices,
   # because 85,119 product pages is about forty-five hours of polite fetching
   # against a six-hour ceiling. It reads department listings now -- twenty-four
-  # products per request instead of one -- which was estimated at two hours and
-  # measures about eight: the shop takes ~3.5 seconds a page, and 3,551
-  # departments is more than one job. So Carrefour is killed at the limit every
-  # night, and has never swept.
+  # products per request instead of one -- and all 3,551 departments measure
+  # about eight hours, more than one job.
   #
-  # What it does do every night is remove what is not groceries: it reads the
-  # 545 grocery departments first, after which anything another department shows
-  # is known to be outside groceries and is removed as it is read. A killed job
-  # keeps every removal it made. The scraper also checks its own coverage
-  # against the sitemap and refuses to conclude anything from absence if the
-  # departments accounted for less than 95% of it.
+  # So since 2026-09-17 the nightly run reads the 545 GROCERY departments only
+  # (--groceries-only) and closes as a deliberate partial. Those are the only
+  # ones it imports from, so nothing outside groceries can arrive; what had
+  # arrived before the catalog read groceries only was removed once, by
+  # carrefour-removals.yml. Reading the rest every night found nothing and got
+  # the job killed at its limit, which painted Carrefour red on the dashboard
+  # every day. The price is that Carrefour never sweeps: a product it stops
+  # selling keeps its listing, with the stock flag its last grocery pass read.
