@@ -59,8 +59,13 @@ const DEFAULT_UA =
   'FamCartCatalogBot/1.0 (+https://famcart-app.vercel.app; shopping list; polite, cached, low rate)'
 
 export class CircuitOpenError extends Error {
-  constructor(host: string) {
-    super(`circuit open for ${host}`)
+  /**
+   * `reason` is the failure that opened it. Without it the log said only
+   * "circuit open", and Lidl Belgium's real cause -- Node refusing a 20 KB
+   * header on every page -- went unwritten for a night.
+   */
+  constructor(host: string, reason?: string) {
+    super(reason ? `circuit open for ${host}: ${reason}` : `circuit open for ${host}`)
     this.name = 'CircuitOpenError'
   }
 }
@@ -69,6 +74,8 @@ interface HostState {
   failures: number
   openUntil: number
   nextAllowedAt: number
+  /** The failure that last counted toward the breaker, for the error it opens. */
+  lastReason?: string
 }
 
 export class HttpClient {
@@ -153,7 +160,7 @@ export class HttpClient {
     const retries = tolerant ? 0 : this.retries
 
     if (state.openUntil > this.now()) {
-      throw new CircuitOpenError(host)
+      throw new CircuitOpenError(host, state.lastReason)
     }
 
     const wait = state.nextAllowedAt - this.now()
@@ -200,10 +207,11 @@ export class HttpClient {
         if (response.status === 429 || response.status >= 500) {
           if (tolerant) return toResponse(response, body, bytes, url)
           state.failures++
+          state.lastReason = `HTTP ${response.status}`
           if (state.failures >= this.tripAfter) {
             state.openUntil = this.now() + this.cooldownMs
             state.failures = 0
-            throw new CircuitOpenError(host)
+            throw new CircuitOpenError(host, state.lastReason)
           }
           lastError = new Error(`HTTP ${response.status} for ${url}`)
           if (attempt < retries) {
@@ -234,6 +242,7 @@ export class HttpClient {
         lastError = error
         if (tolerant) throw error
         state.failures++
+        state.lastReason = describeFailure(error)
         // Re-stamped from HERE on a failure, unlike the success path. A timeout
         // means the host took the whole window and said nothing, and the polite
         // response to that is a fresh gap after it -- not one measured from a
@@ -242,7 +251,7 @@ export class HttpClient {
         if (state.failures >= this.tripAfter) {
           state.openUntil = this.now() + this.cooldownMs
           state.failures = 0
-          throw new CircuitOpenError(host)
+          throw new CircuitOpenError(host, state.lastReason)
         }
         if (attempt < retries) await this.sleep(500 * 2 ** attempt)
       } finally {
@@ -309,6 +318,16 @@ function toResponse(response: Response, body: string, bytes: Uint8Array, url: st
     headers: response.headers,
     url,
   }
+}
+
+/**
+ * A fetch failure in words. Node's fetch throws "fetch failed" and keeps the
+ * real reason -- "Headers Overflow Error", a reset, a DNS miss -- in `cause`.
+ */
+function describeFailure(error: unknown): string {
+  if (!(error instanceof Error)) return String(error)
+  const cause = error.cause instanceof Error ? error.cause.message : ''
+  return cause && cause !== error.message ? `${error.message}: ${cause}` : error.message
 }
 
 function hostOf(url: string): string {

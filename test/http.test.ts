@@ -254,3 +254,37 @@ describe('onEveryResponse', () => {
     expect(heard).toBe(0)
   })
 })
+
+// A circuit that opens must say WHY. Lidl Belgium opened it on its first page
+// for a night, and the log said only "circuit open": the reason -- Node refusing
+// a 20 KB header -- was one line away and never written.
+describe('why a circuit opened', () => {
+  it('carries the last failure that opened it', async () => {
+    const { impl } = scriptedFetch([new Error('Headers Overflow Error')])
+    const client = new HttpClient({ fetchImpl: impl, minIntervalMs: 0, retries: 0, tripAfter: 1, ...fakeClock() })
+    await expect(client.get('https://example.test/p/1')).rejects.toSatisfy(
+      (error: unknown) => error instanceof CircuitOpenError && /Headers Overflow Error/.test(error.message),
+    )
+  })
+
+  it('names the status when the host answered with one', async () => {
+    const { impl } = scriptedFetch([503])
+    const client = new HttpClient({ fetchImpl: impl, minIntervalMs: 0, retries: 0, tripAfter: 1, ...fakeClock() })
+    await expect(client.get('https://example.test/p/1')).rejects.toThrow(/503/)
+  })
+})
+
+// lidl.be sends a 20 KB Content-Security-Policy with every product page, and
+// Node's fetch refuses headers over 16 KB by default -- every page failed, and
+// the crawl stopped at zero. The limit is raised where every scrape starts.
+describe('the header limit', () => {
+  it('is raised in every script that starts a scrape', async () => {
+    const { readFileSync } = await import('node:fs')
+    const scripts = JSON.parse(readFileSync('package.json', 'utf8')).scripts as Record<string, string>
+    const scrapes = Object.entries(scripts).filter(([, cmd]) => cmd.includes('src/cli/scrape.ts'))
+    expect(scrapes.length).toBeGreaterThan(0)
+    for (const [name, cmd] of scrapes) {
+      expect(cmd, name).toMatch(/--max-http-header-size=\d{5,}/)
+    }
+  })
+})
