@@ -40,6 +40,18 @@ create table if not exists public.catalog_stats_cache (
   retailers  jsonb not null
 );
 
+-- { "<country>": { "products": n, "listings": n, "unavailable": n, "with_barcode": n } }
+--
+-- Added after the table existed, so it is its own statement: a column declared
+-- inside `create table if not exists` reaches new databases only, because the
+-- block is skipped where the table is already there.
+--
+-- For the Scrapers page's country selector. It cannot be summed from
+-- `retailers` in the browser: a product two shops in one country both sell is
+-- one product there, and only a count over the listings knows that. There is no
+-- "sold nowhere" per country -- a product with no listing belongs to none.
+alter table public.catalog_stats_cache add column if not exists countries jsonb not null default '{}'::jsonb;
+
 alter table public.catalog_stats_cache drop constraint if exists catalog_stats_cache_single_row;
 alter table public.catalog_stats_cache add constraint catalog_stats_cache_single_row check (id);
 
@@ -54,7 +66,7 @@ security definer
 set search_path = public
 as $fn$
 begin
-  insert into public.catalog_stats_cache (id, counted_at, totals, retailers)
+  insert into public.catalog_stats_cache (id, counted_at, totals, retailers, countries)
   select
     true,
     now(),
@@ -79,11 +91,33 @@ begin
             from public.catalog_listings
            group by retailer_id
         ) c on c.retailer_id = r.id
+    ), '{}'::jsonb),
+    -- One pass over the listings again, grouped by the shop's country. A
+    -- country with no listings is absent rather than a row of zeros.
+    coalesce((
+      select jsonb_object_agg(c.country, jsonb_build_object(
+               'products',     c.products,
+               'listings',     c.listings,
+               'unavailable',  c.unavailable,
+               'with_barcode', c.with_barcode))
+        from (
+          select r.country,
+                 count(distinct l.product_id)                                            as products,
+                 count(*)                                                                as listings,
+                 count(*) filter (where not l.available)                                 as unavailable,
+                 count(distinct l.product_id) filter (where b.product_id is not null)    as with_barcode
+            from public.catalog_listings l
+            join public.catalog_retailers r on r.id = l.retailer_id
+            left join (select distinct product_id from public.catalog_identifiers) b
+              on b.product_id = l.product_id
+           group by r.country
+        ) c
     ), '{}'::jsonb)
   on conflict (id) do update
     set counted_at = excluded.counted_at,
         totals     = excluded.totals,
-        retailers  = excluded.retailers;
+        retailers  = excluded.retailers,
+        countries  = excluded.countries;
 end;
 $fn$;
 
@@ -124,6 +158,7 @@ begin
 
   return coalesce(v_cache.totals, '{}'::jsonb) || jsonb_build_object(
     'counted_at', v_cache.counted_at,
+    'countries', coalesce(v_cache.countries, '{}'::jsonb),
     'retailers', (
       select coalesce(jsonb_agg(x order by x ->> 'slug'), '[]'::jsonb) from (
         select jsonb_build_object(
