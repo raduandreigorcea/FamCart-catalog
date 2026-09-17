@@ -181,7 +181,8 @@ begin
         ) as x
           from public.catalog_retailers r
           left join lateral (
-            select s.status, s.started_at, s.finished_at, s.products_found, s.products_valid,
+            -- The id, so a page can link straight to this run rather than to the list.
+            select s.id, s.status, s.started_at, s.finished_at, s.products_found, s.products_valid,
                    s.products_rejected, s.inserted, s.updated, s.unchanged,
                    s.marked_unavailable, s.error_count, s.error,
                    -- 022's sign of life, so Health can name a crawl that went quiet.

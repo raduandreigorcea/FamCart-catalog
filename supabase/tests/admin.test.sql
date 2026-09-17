@@ -1,7 +1,7 @@
 -- The admin surface. Two things worth testing: that every door is locked, and
 -- that the filters narrow the thing they claim to narrow.
 begin;
-select plan(35);
+select plan(36);
 
 delete from public.catalog_scrape_runs;
 delete from public.catalog_listings;
@@ -162,6 +162,11 @@ select ok(
   (select (x -> 'last_run') ? 'last_alive_at' from jsonb_array_elements(public.catalog_stats() -> 'retailers') x
     where x ->> 'slug' = 'auchan'),
   'and whether a shop''s last run has shown a sign of life');
+select is(
+  (select (x -> 'last_run' ->> 'id')::uuid from jsonb_array_elements(public.catalog_stats() -> 'retailers') x
+    where x ->> 'slug' = 'auchan'),
+  :'a_run_id'::uuid,
+  'and the last run''s id, so the page can link to that run');
 
 -- The refresh counts the whole catalog; a signed-in caller must not be able to
 -- make it do that on demand.
