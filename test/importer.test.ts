@@ -4,9 +4,10 @@
 // in Node -- what gets rejected before it ever reaches the database, and the rule
 // that a run which did not finish is never closed as one that did.
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { validate } from '../src/importer/validate.ts'
-import { ScrapeRun, RETRY_DELAYS_MS } from '../src/importer/run.ts'
+import { ScrapeRun, RETRY_DELAYS_MS, watchLiveness } from '../src/importer/run.ts'
+import { HttpClient } from '../src/core/http.ts'
 import type { CatalogDb } from '../src/importer/run.ts'
 import { connect } from '../src/importer/run.ts'
 import type { RetailerProduct } from '../src/core/types.ts'
@@ -316,5 +317,90 @@ describe('connect', () => {
     // the default target of every load.
     expect(() => connect({})).toThrow(/CATALOG_SUPABASE_URL/)
     expect(() => connect({ CATALOG_SUPABASE_URL: 'https://x.test' })).toThrow(/SERVICE_ROLE_KEY/)
+  })
+})
+
+describe('the sign of life', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('reports the pages read since the last report', async () => {
+    const { db, calls } = fakeDb(OPEN)
+    const run = new ScrapeRun(db, 'auchan', testLogger())
+    await run.open()
+    await run.alive(12)
+    expect(calls.filter((c) => c.name === 'catalog_run_alive')).toEqual([
+      { name: 'catalog_run_alive', args: { p_run_id: 'run-1', p_pages: 12 } },
+    ])
+  })
+
+  // A crawl must never die because the dashboard could not be told it is alive.
+  it('does not throw when the sign of life cannot be recorded', async () => {
+    const { db } = fakeDb({ ...OPEN, catalog_run_alive: new Error('boom') })
+    const run = new ScrapeRun(db, 'auchan', testLogger())
+    await run.open()
+    await expect(run.alive(1)).resolves.toBeUndefined()
+  })
+
+  it('reports once a minute while answers arrive, counting the good pages', async () => {
+    vi.useFakeTimers()
+    const { db, calls } = fakeDb(OPEN)
+    const run = new ScrapeRun(db, 'auchan', testLogger())
+    await run.open()
+    const client = new HttpClient({
+      fetchImpl: (async () => new Response('x', { status: 200 })) as unknown as typeof fetch,
+      minIntervalMs: 0,
+      sleep: async () => {},
+    })
+    const stop = watchLiveness(run, 60_000)
+
+    await client.get('https://example.test/1')
+    await client.get('https://example.test/2')
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    // A minute with no answer at all says nothing: silence is the signal.
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    await stop()
+    const alive = calls.filter((c) => c.name === 'catalog_run_alive')
+    expect(alive).toHaveLength(1)
+    expect(alive[0].args.p_pages).toBe(2)
+  })
+
+  it('still counts as alive when every answer was a refusal, with no pages read', async () => {
+    vi.useFakeTimers()
+    const { db, calls } = fakeDb(OPEN)
+    const run = new ScrapeRun(db, 'auchan', testLogger())
+    await run.open()
+    const client = new HttpClient({
+      fetchImpl: (async () => new Response('x', { status: 404 })) as unknown as typeof fetch,
+      minIntervalMs: 0,
+      sleep: async () => {},
+    })
+    const stop = watchLiveness(run, 60_000)
+    await client.get('https://example.test/gone')
+    await vi.advanceTimersByTimeAsync(60_000)
+    await stop()
+    const alive = calls.filter((c) => c.name === 'catalog_run_alive')
+    expect(alive).toHaveLength(1)
+    expect(alive[0].args.p_pages).toBe(0)
+  })
+
+  it('sends what is left when it is stopped', async () => {
+    vi.useFakeTimers()
+    const { db, calls } = fakeDb(OPEN)
+    const run = new ScrapeRun(db, 'auchan', testLogger())
+    await run.open()
+    const client = new HttpClient({
+      fetchImpl: (async () => new Response('x', { status: 200 })) as unknown as typeof fetch,
+      minIntervalMs: 0,
+      sleep: async () => {},
+    })
+    const stop = watchLiveness(run, 60_000)
+    await client.get('https://example.test/1')
+    await stop()
+    const alive = calls.filter((c) => c.name === 'catalog_run_alive')
+    expect(alive.map((c) => c.args.p_pages)).toEqual([1])
   })
 })

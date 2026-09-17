@@ -13,6 +13,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { RetailerProduct, Logger } from '../core/types.ts'
 import { validate } from './validate.ts'
 import { isBundle } from '../core/bundles.ts'
+import { onEveryResponse } from '../core/http.ts'
 import type { ImportRow, RejectReason } from './validate.ts'
 
 /** Rows per catalog_import_listings call. Big enough to be cheap, small enough
@@ -290,6 +291,21 @@ export class ScrapeRun {
   private reportedValid = 0
   private reportedRejected = 0
 
+  /**
+   * Say the crawl is alive, and how many pages it has read since it last said so.
+   * Separate from heartbeat() because that one reports IMPORTED products, and a
+   * crawl can read for hours without importing one. Never throws: a crawl must
+   * not die because the dashboard could not be told it is working.
+   */
+  async alive(pages: number): Promise<void> {
+    if (this.dryRun || !this.runId) return
+    const { error } = await this.db.rpc('catalog_run_alive', {
+      p_run_id: this.runId,
+      p_pages: pages,
+    })
+    if (error) this.log.warn('sign of life could not be recorded', { error: describe(error) })
+  }
+
   /** Close as completed, letting the database decide whether to sweep. */
   /**
    * @param coveredIndex the run accounted for essentially everything the shop
@@ -393,4 +409,46 @@ function describe(error: unknown): string {
     return String((error as { message: unknown }).message)
   }
   return String(error)
+}
+
+/**
+ * Report a running crawl's sign of life once a minute, for as long as answers
+ * keep arriving.
+ *
+ * A minute in which the transport heard nothing reports nothing, and that
+ * silence is the whole point: the Scrapers page reads `last_alive_at`, and a
+ * crawl that has stopped hearing back goes quiet there on its own, however long
+ * its import count had already stood still for honest reasons. Any answer
+ * counts as life, a 404 included -- a shop saying "gone" is a shop answering --
+ * but only a good one counts as a page read.
+ *
+ * Returns a stop function that sends what the last partial minute heard.
+ */
+export function watchLiveness(run: ScrapeRun, intervalMs = 60_000): () => Promise<void> {
+  let heard = 0
+  let pages = 0
+  const unsubscribe = onEveryResponse((notice) => {
+    heard++
+    if (notice.ok) pages++
+  })
+
+  let pending: Promise<void> = Promise.resolve()
+  const report = () => {
+    if (heard === 0) return
+    const count = pages
+    heard = 0
+    pages = 0
+    pending = pending.then(() => run.alive(count))
+  }
+
+  const timer = setInterval(report, intervalMs)
+  // A timer must not be the thing keeping a finished crawl's process alive.
+  if (typeof timer === 'object' && timer && 'unref' in timer) timer.unref()
+
+  return async () => {
+    clearInterval(timer)
+    unsubscribe()
+    report()
+    await pending
+  }
 }

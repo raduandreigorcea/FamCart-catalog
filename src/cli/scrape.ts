@@ -14,7 +14,7 @@
 import process from 'node:process'
 import { createLogger } from '../core/logger.ts'
 import { SCRAPERS, scraperFor, IMPLEMENTED } from '../core/registry.ts'
-import { ScrapeRun, connect, BATCH_SIZE } from '../importer/run.ts'
+import { ScrapeRun, connect, BATCH_SIZE, watchLiveness } from '../importer/run.ts'
 import type { CatalogDb } from '../importer/run.ts'
 import type { RetailerScraper } from '../core/types.ts'
 import { loadEnvFiles } from './env.ts'
@@ -117,8 +117,14 @@ async function scrapeOne(
     for (const id of excluded.splice(0)) await run.exclude(id)
   }
 
+  // The sign of life, once a minute while the shop keeps answering. Stopped as
+  // soon as the crawl ends, while the run is still open to receive it: a run
+  // that has been closed ignores it.
+  let stopLiveness: (() => Promise<void>) | null = null
+
   try {
     await run.open()
+    stopLiveness = watchLiveness(run)
 
     let sinceLastBeat = 0
     for await (const product of scraper.discoverProducts({
@@ -147,6 +153,8 @@ async function scrapeOne(
       }
     }
     await drainExcluded()
+    await stopLiveness()
+    stopLiveness = null
 
     if (controller.signal.aborted) {
       // The generator stops cleanly on abort, so without this check an
@@ -226,6 +234,8 @@ async function scrapeOne(
     // What was reported before the failure is still evidence; run.fail removes it.
     try {
       await drainExcluded()
+      await stopLiveness?.()
+      stopLiveness = null
     } catch {
       // run.fail below records the failure either way.
     }
@@ -237,6 +247,9 @@ async function scrapeOne(
     })
     return false
   } finally {
+    // Only still set if something above threw before it could be stopped; the
+    // timer must not outlive the run either way.
+    void stopLiveness?.()
     process.off('SIGINT', onSignal)
     process.off('SIGTERM', onSignal)
   }
