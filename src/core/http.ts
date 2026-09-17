@@ -264,7 +264,43 @@ export class HttpClient {
   }
 }
 
+/** What a listener hears about an answer. The body stays with the caller. */
+export interface ResponseNotice {
+  status: number
+  ok: boolean
+  url: string
+}
+
+type ResponseListener = (notice: ResponseNotice) => void
+
+const responseListeners = new Set<ResponseListener>()
+
+/**
+ * Be told whenever ANY client receives an answer, whatever the answer was.
+ *
+ * It is the scraper's sign of life, and it lives here because this is the one
+ * place every request passes through: a retailer module never calls fetch, so
+ * nothing above the transport sees a page that was read and then excluded. The
+ * Scrapers page used to judge a crawl by its imported count alone, and a crawl
+ * that reads for hours and imports nothing -- Carrefour's non-grocery
+ * departments, a shop whose pages are all excluded -- looked exactly like a dead
+ * one. See watchLiveness in importer/run.ts.
+ *
+ * Module-wide rather than per client, deliberately: each scraper builds its own
+ * HttpClient, the CLI runs one scraper per process, and a per-client option
+ * would have to be threaded through eleven retailer modules to say one thing.
+ *
+ * A request that never got an answer is NOT heard. Silence is the signal.
+ */
+export function onEveryResponse(listener: ResponseListener): () => void {
+  responseListeners.add(listener)
+  return () => {
+    responseListeners.delete(listener)
+  }
+}
+
 function toResponse(response: Response, body: string, bytes: Uint8Array, url: string): HttpResponse {
+  for (const listener of responseListeners) listener({ status: response.status, ok: response.ok, url })
   return {
     status: response.status,
     ok: response.ok,
