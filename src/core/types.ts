@@ -118,6 +118,13 @@ export interface ScrapeContext {
    */
   reportProgress?: (done: number, total: number, unit: string) => void
   /**
+   * Read only what may be REMOVED, trusting a grocery pass that already ran:
+   * `groceryIds` is every listing it saw (importer/seen.ts). Only Carrefour
+   * implements it -- the one shop whose nightly run never reaches its
+   * non-grocery departments. Nothing is imported in this mode.
+   */
+  removalsOnly?: { groceryIds: ReadonlySet<string> }
+  /**
    * Say that the shop files this listing OUTSIDE GROCERIES: a t-shirt, a drill,
    * a bunch of flowers. It is not imported, and the importer removes whatever an
    * earlier run imported under the same id (catalog_purge_listings).
