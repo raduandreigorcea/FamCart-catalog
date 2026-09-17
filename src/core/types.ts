@@ -125,6 +125,12 @@ export interface ScrapeContext {
    */
   removalsOnly?: { groceryIds: ReadonlySet<string> }
   /**
+   * Read the grocery departments and stop: the nightly Carrefour run. The rest
+   * holds nothing to import, and reading it only cost the job its time limit.
+   * No coverage is concluded, since a quarter of the sitemap is read by design.
+   */
+  groceriesOnly?: boolean
+  /**
    * Say that the shop files this listing OUTSIDE GROCERIES: a t-shirt, a drill,
    * a bunch of flowers. It is not imported, and the importer removes whatever an
    * earlier run imported under the same id (catalog_purge_listings).

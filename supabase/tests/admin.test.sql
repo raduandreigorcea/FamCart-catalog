@@ -1,7 +1,7 @@
 -- The admin surface. Two things worth testing: that every door is locked, and
 -- that the filters narrow the thing they claim to narrow.
 begin;
-select plan(36);
+select plan(37);
 
 delete from public.catalog_scrape_runs;
 delete from public.catalog_listings;
@@ -167,6 +167,10 @@ select is(
     where x ->> 'slug' = 'auchan'),
   :'a_run_id'::uuid,
   'and the last run''s id, so the page can link to that run');
+select ok(
+  (select (x -> 'last_run') ? 'stats' from jsonb_array_elements(public.catalog_stats() -> 'retailers') x
+    where x ->> 'slug' = 'auchan'),
+  'and its stats, which say whether a partial run was partial on purpose');
 
 -- The refresh counts the whole catalog; a signed-in caller must not be able to
 -- make it do that on demand.

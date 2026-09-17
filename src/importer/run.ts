@@ -284,6 +284,7 @@ export class ScrapeRun {
         excluded: this.totals.excluded,
         purged_listings: this.totals.purgedListings,
         purged_products: this.totals.purgedProducts,
+        ...(this.deliberate ? { deliberate: true } : {}),
       },
     })
     if (error) {
@@ -295,6 +296,7 @@ export class ScrapeRun {
     this.reportedRejected = this.totals.rejected
   }
 
+  private deliberate = false
   private reportedFound = 0
   private reportedValid = 0
   private reportedRejected = 0
@@ -358,6 +360,11 @@ export class ScrapeRun {
     await this.flush()
     await this.flushExclusions()
     this.log.info('run closed as partial', { retailer: this.retailer, reason })
+    // Every run closed through here is partial ON PURPOSE -- a slice, a limit,
+    // removals only, groceries only. A run the database refuses to sweep is
+    // partial too, but closes through complete(). Said in the stats, so a
+    // dashboard can tell the two apart.
+    this.deliberate = true
     if (this.dryRun || !this.runId) return
     await this.heartbeat()
     const { error } = await this.db.rpc('catalog_run_partial', {

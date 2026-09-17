@@ -320,6 +320,20 @@ describe('connect', () => {
   })
 })
 
+describe('a deliberate partial run', () => {
+  // A slice, a limit, a removals-only or a groceries-only run closes partial ON
+  // PURPOSE. The run says so in its stats, so the dashboards can tell it from a
+  // run that refused to sweep, which is partial for a reason somebody should read.
+  it('marks itself deliberate in its stats', async () => {
+    const { db, calls } = fakeDb({ ...OPEN, catalog_run_partial: {} })
+    const run = new ScrapeRun(db, 'carrefour', testLogger())
+    await run.open()
+    await run.partial('groceries only, by design')
+    const stats = calls.filter((c) => c.name === 'catalog_run_progress').at(-1)?.args.p_stats
+    expect(stats).toMatchObject({ deliberate: true })
+  })
+})
+
 describe('the sign of life', () => {
   afterEach(() => {
     vi.useRealTimers()

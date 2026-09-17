@@ -123,3 +123,31 @@ describe('loadSeenSince', () => {
     await expect(loadSeenSince(env, 'nowhere', since, impl)).rejects.toThrow(/unknown retailer/i)
   })
 })
+
+// The nightly Carrefour run, from 2026-09-17: the groceries only. Everything
+// outside them was removed once (the removals-only run above), and a nightly
+// run imports only from grocery departments, so nothing new of that kind can
+// arrive -- the second phase only cost the job its time limit, every night.
+describe('a groceries-only Carrefour run', () => {
+  it('reads the grocery departments and nothing else, and draws no conclusion about coverage', async () => {
+    const fetchImpl = fixtureFetch(routes)
+    const coverage: Array<[number, number]> = []
+    const products = await collect(
+      new CarrefourScraper().discoverProducts({
+        log: testLogger(),
+        fetchImpl,
+        minIntervalMs: 0,
+        groceriesOnly: true,
+        reportCoverage: (seen: number, advertised: number) => void coverage.push([seen, advertised]),
+      }),
+      500,
+    )
+    const calls = callsOf(fetchImpl)
+    expect(products.length).toBeGreaterThan(0)
+    expect(calls.some((u) => u.includes('/bacanie-carrefour/'))).toBe(true)
+    expect(calls.some((u) => u.includes('/tex/femei/'))).toBe(false)
+    expect(calls.some((u) => u.includes('/electrocasnice/'))).toBe(false)
+    // Reading a quarter of the sitemap's products by design is not "incomplete".
+    expect(coverage).toEqual([])
+  })
+})
