@@ -1,7 +1,7 @@
 -- The admin surface. Two things worth testing: that every door is locked, and
 -- that the filters narrow the thing they claim to narrow.
 begin;
-select plan(32);
+select plan(35);
 
 delete from public.catalog_scrape_runs;
 delete from public.catalog_listings;
@@ -148,6 +148,20 @@ select is((public.catalog_stats() -> 'countries' -> 'RO' ->> 'with_barcode')::bi
   'and a country counts the products carrying a barcode');
 select is(public.catalog_stats() -> 'countries' -> 'IT', null,
   'a country with no listings is absent rather than a row of zeros');
+
+-- For the Health page: the catalog's own size, each shop's name, and the last
+-- run's sign of life.
+select ok((public.catalog_stats() ->> 'database_size')::bigint > 0,
+  'the report carries the catalog database''s size');
+select is(
+  (select x ->> 'name' from jsonb_array_elements(public.catalog_stats() -> 'retailers') x
+    where x ->> 'slug' = 'mega-image'),
+  'Mega Image',
+  'and each shop''s own name, not only its slug');
+select ok(
+  (select (x -> 'last_run') ? 'last_alive_at' from jsonb_array_elements(public.catalog_stats() -> 'retailers') x
+    where x ->> 'slug' = 'auchan'),
+  'and whether a shop''s last run has shown a sign of life');
 
 -- The refresh counts the whole catalog; a signed-in caller must not be able to
 -- make it do that on demand.

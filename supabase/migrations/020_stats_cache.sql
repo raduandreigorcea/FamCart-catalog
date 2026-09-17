@@ -158,11 +158,17 @@ begin
 
   return coalesce(v_cache.totals, '{}'::jsonb) || jsonb_build_object(
     'counted_at', v_cache.counted_at,
+    -- Live, not cached: one catalog lookup, and the Health page shows it beside
+    -- the app database's own size so the two are never confused.
+    'database_size', pg_database_size(current_database()),
     'countries', coalesce(v_cache.countries, '{}'::jsonb),
     'retailers', (
       select coalesce(jsonb_agg(x order by x ->> 'slug'), '[]'::jsonb) from (
         select jsonb_build_object(
           'slug', r.slug,
+          -- What the shop calls itself. Nine shops are "Lidl", so the page says
+          -- the name WITH the country; the slug alone read as "lidl be".
+          'name', r.name,
           'country', r.country,
           'enabled', r.enabled,
           'listings',  (v_cache.retailers -> r.slug ->> 'listings')::bigint,
@@ -177,7 +183,9 @@ begin
           left join lateral (
             select s.status, s.started_at, s.finished_at, s.products_found, s.products_valid,
                    s.products_rejected, s.inserted, s.updated, s.unchanged,
-                   s.marked_unavailable, s.error_count, s.error
+                   s.marked_unavailable, s.error_count, s.error,
+                   -- 022's sign of life, so Health can name a crawl that went quiet.
+                   s.last_alive_at
               from public.catalog_scrape_runs s
              where s.retailer_id = r.id
              order by s.started_at desc limit 1
