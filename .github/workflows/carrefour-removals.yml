@@ -1,0 +1,67 @@
+name: Carrefour removals
+
+# The one-off cleanup of what Carrefour's scraper imported before the catalog
+# read groceries only: t-shirts, televisions, flowerpots, some 14,000 listings.
+#
+# WHY NOT THE NIGHTLY RUN. It reads the 545 grocery departments first, which
+# takes about 4h40 of its five hours, and only then may it call anything else
+# non-grocery -- so the 3,023 departments where that stock lives are never
+# reached. This reads only those, trusting a grocery pass that already ran
+# (`--groceries-since`): whatever that pass saw is groceries, and only what a
+# non-grocery department shows and that pass did not see is removed. The
+# scraper refuses a set of known groceries too small to be real.
+#
+# Run by hand, and in two halves: the 3,023 departments are about seven hours at
+# the shop's pace, over a job's ceiling. Removal acts on positive evidence, so a
+# half that is killed keeps every removal it made, and the other half does not
+# depend on it.
+#
+# In the same concurrency group as the nightly scrape, so it waits for that to
+# finish rather than putting a second crawler on carrefour.ro.
+
+on:
+  workflow_dispatch:
+    inputs:
+      groceries_since:
+        description: 'When the trusted grocery pass started (ISO), e.g. 2026-09-16T09:50:43Z'
+        required: true
+      slice:
+        description: 'Which half of the non-grocery departments'
+        required: true
+        type: choice
+        options: ['1/2', '2/2']
+
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  removals:
+    name: carrefour removals ${{ github.event.inputs.slice }}
+    runs-on: ubuntu-latest
+    # A job's ceiling, not the scrape's five hours: this reads no groceries, so
+    # every minute of it is a department that may hold something to remove.
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Remove what is not groceries
+        env:
+          CATALOG_SUPABASE_URL: ${{ secrets.CATALOG_SUPABASE_URL }}
+          CATALOG_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CATALOG_SUPABASE_SERVICE_ROLE_KEY }}
+          # Through the environment, never interpolated into the command: an
+          # input spliced into a shell line is a way to run whatever it says.
+          GROCERIES_SINCE: ${{ github.event.inputs.groceries_since }}
+          SLICE: ${{ github.event.inputs.slice }}
+        run: >-
+          npm run scrape -- carrefour
+          --removals-only
+          --groceries-since "$GROCERIES_SINCE"
+          --shard "$SLICE"

@@ -13,6 +13,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { RetailerProduct, Logger } from '../core/types.ts'
 import { validate } from './validate.ts'
 import { isBundle } from '../core/bundles.ts'
+import { onEveryResponse } from '../core/http.ts'
 import type { ImportRow, RejectReason } from './validate.ts'
 
 /** Rows per catalog_import_listings call. Big enough to be cheap, small enough
@@ -275,7 +276,16 @@ export class ScrapeRun {
       p_products_valid: this.totals.valid - this.reportedValid,
       p_products_rejected: this.totals.rejected - this.reportedRejected,
       p_error_count: 0,
-      p_stats: { rejections: this.totals.rejections },
+      // What the run REMOVED, beside what it rejected. A removals-only run
+      // imports nothing, and its row said 0, 0, 0 after deleting thousands:
+      // the counts were in the job's log and nowhere the Scrapers page reads.
+      p_stats: {
+        rejections: this.totals.rejections,
+        excluded: this.totals.excluded,
+        purged_listings: this.totals.purgedListings,
+        purged_products: this.totals.purgedProducts,
+        ...(this.deliberate ? { deliberate: true } : {}),
+      },
     })
     if (error) {
       this.log.warn('progress could not be recorded', { error: describe(error) })
@@ -286,9 +296,28 @@ export class ScrapeRun {
     this.reportedRejected = this.totals.rejected
   }
 
+  private deliberate = false
   private reportedFound = 0
   private reportedValid = 0
   private reportedRejected = 0
+
+  /**
+   * Say the crawl is alive, and how many pages it has read since it last said so.
+   * Separate from heartbeat() because that one reports IMPORTED products, and a
+   * crawl can read for hours without importing one. Never throws: a crawl must
+   * not die because the dashboard could not be told it is working.
+   */
+  async alive(pages: number, progress: RunProgress | null = null): Promise<void> {
+    if (this.dryRun || !this.runId) return
+    const { error } = await this.db.rpc('catalog_run_alive', {
+      p_run_id: this.runId,
+      p_pages: pages,
+      p_done: progress?.done ?? null,
+      p_total: progress?.total ?? null,
+      p_unit: progress?.unit ?? null,
+    })
+    if (error) this.log.warn('sign of life could not be recorded', { error: describe(error) })
+  }
 
   /** Close as completed, letting the database decide whether to sweep. */
   /**
@@ -331,6 +360,11 @@ export class ScrapeRun {
     await this.flush()
     await this.flushExclusions()
     this.log.info('run closed as partial', { retailer: this.retailer, reason })
+    // Every run closed through here is partial ON PURPOSE -- a slice, a limit,
+    // removals only, groceries only. A run the database refuses to sweep is
+    // partial too, but closes through complete(). Said in the stats, so a
+    // dashboard can tell the two apart.
+    this.deliberate = true
     if (this.dryRun || !this.runId) return
     await this.heartbeat()
     const { error } = await this.db.rpc('catalog_run_partial', {
@@ -393,4 +427,62 @@ function describe(error: unknown): string {
     return String((error as { message: unknown }).message)
   }
   return String(error)
+}
+
+/**
+ * Report a running crawl's sign of life once a minute, for as long as answers
+ * keep arriving.
+ *
+ * A minute in which the transport heard nothing reports nothing, and that
+ * silence is the whole point: the Scrapers page reads `last_alive_at`, and a
+ * crawl that has stopped hearing back goes quiet there on its own, however long
+ * its import count had already stood still for honest reasons. Any answer
+ * counts as life, a 404 included -- a shop saying "gone" is a shop answering --
+ * but only a good one counts as a page read.
+ *
+ * Returns a stop function that sends what the last partial minute heard.
+ */
+/** How far a crawl is through its own plan (ScrapeContext.reportProgress). */
+export interface RunProgress {
+  done: number
+  total: number
+  unit: string
+}
+
+export function watchLiveness(
+  run: ScrapeRun,
+  intervalMs = 60_000,
+  // The latest the scraper reported, read at each report rather than pushed on
+  // every page: a sitemap crawl reports tens of thousands of times a night.
+  progress: () => RunProgress | null = () => null,
+): () => Promise<void> {
+  let heard = 0
+  let pages = 0
+  const unsubscribe = onEveryResponse((notice) => {
+    heard++
+    if (notice.ok) pages++
+  })
+
+  let pending: Promise<void> = Promise.resolve()
+  const report = () => {
+    if (heard === 0) return
+    const count = pages
+    heard = 0
+    pages = 0
+    const latest = progress()
+    // The counters too, once a minute: heartbeat() otherwise only runs every
+    // 500 imported products, and a run that removes imports none.
+    pending = pending.then(() => run.alive(count, latest)).then(() => run.heartbeat())
+  }
+
+  const timer = setInterval(report, intervalMs)
+  // A timer must not be the thing keeping a finished crawl's process alive.
+  if (typeof timer === 'object' && timer && 'unref' in timer) timer.unref()
+
+  return async () => {
+    clearInterval(timer)
+    unsubscribe()
+    report()
+    await pending
+  }
 }

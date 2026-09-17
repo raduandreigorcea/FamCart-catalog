@@ -107,6 +107,30 @@ export interface ScrapeContext {
    */
   reportCoverage?: (seen: number, advertised: number) => void
   /**
+   * How far the crawl is through its OWN plan, in a unit it names: "pages" of a
+   * sitemap, Carrefour's "departments", the Auchan "categories" found so far.
+   *
+   * For the Scrapers page's progress bar, which used to estimate from the
+   * shop's last completed run -- which a first run does not have and Carrefour
+   * never has, so those showed no bar at all. A plan can grow while the crawl
+   * learns (Auchan does), so a bar may step back; it is still the truth.
+   * Called often; the CLI keeps the latest and reports it once a minute.
+   */
+  reportProgress?: (done: number, total: number, unit: string) => void
+  /**
+   * Read only what may be REMOVED, trusting a grocery pass that already ran:
+   * `groceryIds` is every listing it saw (importer/seen.ts). Only Carrefour
+   * implements it -- the one shop whose nightly run never reaches its
+   * non-grocery departments. Nothing is imported in this mode.
+   */
+  removalsOnly?: { groceryIds: ReadonlySet<string> }
+  /**
+   * Read the grocery departments and stop: the nightly Carrefour run. The rest
+   * holds nothing to import, and reading it only cost the job its time limit.
+   * No coverage is concluded, since a quarter of the sitemap is read by design.
+   */
+  groceriesOnly?: boolean
+  /**
    * Say that the shop files this listing OUTSIDE GROCERIES: a t-shirt, a drill,
    * a bunch of flowers. It is not imported, and the importer removes whatever an
    * earlier run imported under the same id (catalog_purge_listings).

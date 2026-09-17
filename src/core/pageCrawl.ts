@@ -190,7 +190,9 @@ export async function* crawlProductPages(
     const id = options.idOf?.(url)
     if (id) await ctx.reportExcluded?.(id)
   }
-  for (const entry of wanted) {
+  for (const [index, entry] of wanted.entries()) {
+    // Before each page, so the plan is known before the first one is read.
+    ctx.reportProgress?.(index, wanted.length, 'pages')
     if (ctx.signal?.aborted) return
 
     if (options.skip?.(entry.loc)) {
@@ -263,6 +265,7 @@ export async function* crawlProductPages(
     }
   }
 
+  ctx.reportProgress?.(wanted.length, wanted.length, 'pages')
   ctx.log.info(`${retailer}: crawl finished`, { ...counters, emitted })
 
   // What the shop advertised, against what we actually read. A sliced or

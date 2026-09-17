@@ -14,10 +14,12 @@
 import process from 'node:process'
 import { createLogger } from '../core/logger.ts'
 import { SCRAPERS, scraperFor, IMPLEMENTED } from '../core/registry.ts'
-import { ScrapeRun, connect, BATCH_SIZE } from '../importer/run.ts'
+import { ScrapeRun, connect, BATCH_SIZE, watchLiveness } from '../importer/run.ts'
+import type { RunProgress } from '../importer/run.ts'
 import type { CatalogDb } from '../importer/run.ts'
 import type { RetailerScraper } from '../core/types.ts'
 import { loadEnvFiles } from './env.ts'
+import { loadSeenSince } from '../importer/seen.ts'
 
 interface Args {
   target: string
@@ -27,6 +29,12 @@ interface Args {
   limit?: number
   since?: Date
   shard?: { index: number; of: number }
+  /** Carrefour's cleanup: read only what may be removed (see the scraper). */
+  removalsOnly: boolean
+  /** Carrefour's nightly run: the grocery departments only (see the scraper). */
+  groceriesOnly: boolean
+  /** The grocery pass to trust: listings seen since then are groceries. */
+  groceriesSince?: Date
 }
 
 function parseArgs(argv: string[]): Args {
@@ -62,7 +70,34 @@ function parseArgs(argv: string[]): Args {
     shard = { index: index - 1, of }
   }
 
+  const removalsOnly = argv.includes('--removals-only')
+  const groceriesRaw = flag('groceries-since')
+  const groceriesSince = groceriesRaw ? new Date(groceriesRaw) : undefined
+  if (groceriesSince && Number.isNaN(groceriesSince.getTime())) {
+    throw new Error(`--groceries-since is not a date: ${groceriesRaw}`)
+  }
+  // Refused here rather than defaulted: the date is what decides what counts as
+  // groceries, and a default would be a guess about the one thing that must not
+  // be guessed.
+  if (removalsOnly && !groceriesSince) {
+    throw new Error('--removals-only needs --groceries-since: when the grocery pass it trusts started')
+  }
+  if (removalsOnly && positional[0] !== 'carrefour') {
+    throw new Error('--removals-only is for Carrefour alone: no other shop needs it')
+  }
+
+  const groceriesOnly = argv.includes('--groceries-only')
+  if (groceriesOnly && positional[0] !== 'carrefour') {
+    throw new Error('--groceries-only is for Carrefour alone: no other shop needs it')
+  }
+  if (groceriesOnly && removalsOnly) {
+    throw new Error('--groceries-only and --removals-only read opposite halves; pick one')
+  }
+
   return {
+    removalsOnly,
+    groceriesOnly,
+    groceriesSince,
     target: positional[0] ?? 'all',
     dryRun: argv.includes('--dry-run'),
     ndjson: argv.includes('--ndjson'),
@@ -85,6 +120,18 @@ async function scrapeOne(
     // catalog, and a silent skip is how it stops being one.
     log.warn('no scraper: this retailer was analysed and cannot be read', { note: scraper.note })
     return true
+  }
+
+  // The known groceries, loaded -- and refused if implausibly few -- before a run
+  // row exists, so a bad date costs nothing but the error.
+  let removalsOnly: { groceryIds: ReadonlySet<string> } | undefined
+  if (args.removalsOnly && args.groceriesSince) {
+    const url = process.env.CATALOG_SUPABASE_URL
+    const key = process.env.CATALOG_SUPABASE_SERVICE_ROLE_KEY
+    if (!url || !key) throw new Error('--removals-only needs CATALOG_SUPABASE_URL and CATALOG_SUPABASE_SERVICE_ROLE_KEY')
+    const groceryIds = await loadSeenSince({ url, key }, scraper.retailer, args.groceriesSince)
+    log.info('known groceries loaded', { since: args.groceriesSince.toISOString(), ids: groceryIds.size })
+    removalsOnly = { groceryIds }
   }
 
   const run = new ScrapeRun(db as CatalogDb, scraper.retailer, log, args.dryRun || !db)
@@ -117,8 +164,15 @@ async function scrapeOne(
     for (const id of excluded.splice(0)) await run.exclude(id)
   }
 
+  // The sign of life, once a minute while the shop keeps answering. Stopped as
+  // soon as the crawl ends, while the run is still open to receive it: a run
+  // that has been closed ignores it.
+  let stopLiveness: (() => Promise<void>) | null = null
+  let progress: RunProgress | null = null
+
   try {
     await run.open()
+    stopLiveness = watchLiveness(run, 60_000, () => progress)
 
     let sinceLastBeat = 0
     for await (const product of scraper.discoverProducts({
@@ -127,8 +181,13 @@ async function scrapeOne(
       shard: args.shard,
       log,
       signal: controller.signal,
+      removalsOnly,
+      groceriesOnly: args.groceriesOnly,
       reportIncomplete: (reason) => {
         incomplete ??= reason
+      },
+      reportProgress: (done, total, unit) => {
+        progress = { done, total, unit }
       },
       reportCoverage: (seen, advertised) => {
         coverage = { seen, advertised }
@@ -147,6 +206,8 @@ async function scrapeOne(
       }
     }
     await drainExcluded()
+    await stopLiveness()
+    stopLiveness = null
 
     if (controller.signal.aborted) {
       // The generator stops cleanly on abort, so without this check an
@@ -180,7 +241,11 @@ async function scrapeOne(
     // had to remember at 2am. A limited run against the real catalog would have
     // completed, cleared the floor easily, and marked everything it did not
     // reach as no longer sold.
-    const deliberate = args.shard
+    const deliberate = args.groceriesOnly
+      ? 'groceries only, by design: the departments outside groceries hold nothing to import'
+      : args.removalsOnly
+      ? `removals only${args.shard ? `, slice ${args.shard.index + 1}/${args.shard.of}` : ''}: trusted the grocery pass of ${args.groceriesSince?.toISOString()}`
+      : args.shard
       ? `--shard ${args.shard.index + 1}/${args.shard.of}: one slice of the shop, by design`
       : args.limit !== undefined
         ? `--limit ${args.limit}: a deliberate partial run`
@@ -226,6 +291,8 @@ async function scrapeOne(
     // What was reported before the failure is still evidence; run.fail removes it.
     try {
       await drainExcluded()
+      await stopLiveness?.()
+      stopLiveness = null
     } catch {
       // run.fail below records the failure either way.
     }
@@ -237,6 +304,9 @@ async function scrapeOne(
     })
     return false
   } finally {
+    // Only still set if something above threw before it could be stopped; the
+    // timer must not outlive the run either way.
+    void stopLiveness?.()
     process.off('SIGINT', onSignal)
     process.off('SIGTERM', onSignal)
   }

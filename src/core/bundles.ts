@@ -15,7 +15,11 @@
 //     how the shops label them;
 //   * a QUANTITY OF SOMETHING, then "+", then an OBJECT: "0.7 l + 2 pahare";
 //   * or "+ OBJECT" at the end of the name of something drunk or eaten, for the
-//     names that put the quantity last ("Gin Bombay + pahar, 47.5% alc., 0.7L").
+//     names that put the quantity last ("Gin Bombay + pahar, 47.5% alc., 0.7L");
+//     a bottle's volume counts as "drunk" for a brand the list does not know.
+//
+// Widened on 2026-09-17 from what had slipped through two days of it: a hat
+// with a Metaxa, a glass with a Dictador, a bowl with Chio crisps.
 //
 // What it deliberately leaves alone: "2 x 2 l + Coca-Cola Zero" (two groceries),
 // "+/- 1 kg" and "6 luni+" (not a pack at all), "Men+Care" (a product line), and
@@ -30,15 +34,21 @@ const GIFT_SET = /\b(set|pachet|cutie|caseta)\s+(de\s+|pentru\s+)?cadou\b|\bgift
 
 const OBJECTS =
   'pahar|pahare|halba|halbe|geanta|tricou|sosete|carte|colorat|ceasca|cesti|farfuri|cana|cani|jucari|' +
-  'breloc|umbrel|prosop|minge|sapca|figurin|magnet|termos|boxa|casti|stickere|suport|tava'
+  'breloc|umbrel|prosop|minge|sapca|figurin|magnet|termos|boxa|casti|stickere|suport|tava|caciul|fular'
 
 const QUANTITY_PLUS_OBJECT = new RegExp(`\\d+([.,]\\d+)?\\s?(l|ml|g|kg|cl)\\b[^+]*\\+[^+]*(${OBJECTS})`)
 
+// `bol` only here, never in OBJECTS: "chips + bowl" is a bundle, "a cup, 350 ml
+// + a bowl" is kitchenware, and only the consumable check tells them apart.
 const PLUS_OBJECT_AT_END =
-  /\+[^+]*(pahar|pahare|halba|halbe|geanta|tricou|sosete|carte|colorat|ceasca|jucari|breloc|umbrel|minge|sapca|figurin|magnet)[^+]*$/
+  /\+[^+]*(pahar|pahare|halba|halbe|geanta|tricou|sosete|carte|colorat|ceasca|jucari|breloc|umbrel|minge|sapca|figurin|magnet|caciul|fular|\bbol\b)[^+]*$/
 
 const CONSUMABLE =
-  /(bere|vin|whisk|coniac|brandy|vodka|vodca|gin|rom|lichior|aperitiv|digestiv|campari|baileys|metaxa|cafea|ceai|ciocolat|bautur|suc|apa|lapte|cereale|biscuit|bomboan|nesquik)/
+  /(bere|vin|whisk|coniac|brandy|vodka|vodca|gin|rom|lichior|aperitiv|digestiv|campari|baileys|metaxa|cafea|ceai|ciocolat|bautur|suc|apa|lapte|cereale|biscuit|bomboan|nesquik|chips)/
+
+// A bottle's volume anywhere in the name, for a drink the list above does not
+// name: "Dictador 10 Years + pahar 0.7L" is a rum by its size alone.
+const DRINK_VOLUME = /\d+([.,]\d+)?\s?(l|cl)\b/
 
 const KITCHENWARE = /^(set\s+\d+\s+boluri|set\s+carafa|carafa)\b/
 
@@ -46,5 +56,5 @@ export function isBundle(name: string): boolean {
   const n = fold(name)
   if (GIFT_SET.test(n)) return true
   if (!n.includes('+') || KITCHENWARE.test(n)) return false
-  return QUANTITY_PLUS_OBJECT.test(n) || (PLUS_OBJECT_AT_END.test(n) && CONSUMABLE.test(n))
+  return QUANTITY_PLUS_OBJECT.test(n) || (PLUS_OBJECT_AT_END.test(n) && (CONSUMABLE.test(n) || DRINK_VOLUME.test(n)))
 }

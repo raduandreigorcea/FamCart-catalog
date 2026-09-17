@@ -4,7 +4,7 @@
 // proves the behaviour in milliseconds rather than by waiting for it.
 
 import { describe, it, expect } from 'vitest'
-import { HttpClient, CircuitOpenError } from '../src/core/http.ts'
+import { HttpClient, CircuitOpenError, onEveryResponse } from '../src/core/http.ts'
 
 /** A fetch that answers from a script, recording what it was asked. */
 function scriptedFetch(script: Array<number | Error>): {
@@ -224,5 +224,67 @@ describe('HttpClient', () => {
     const client = new HttpClient({ fetchImpl: impl, minIntervalMs: 0, retries: 1, ...clock })
     await client.get('https://example.test/a')
     expect(clock.now()).toBe(5000)
+  })
+})
+
+// The sign of life the Scrapers page reads. A crawl that fetches for hours and
+// imports nothing -- Carrefour's non-grocery departments, a shop whose every
+// page is excluded -- must still be seen to be working, so the transport says
+// when an answer arrived, whatever the answer was.
+describe('onEveryResponse', () => {
+  it('hears every answer, a 404 included, until it is told to stop', async () => {
+    const { impl } = scriptedFetch([200, 404, 200])
+    const client = new HttpClient({ fetchImpl: impl, minIntervalMs: 0, ...fakeClock() })
+    const heard: Array<[number, boolean]> = []
+    const stop = onEveryResponse((r) => heard.push([r.status, r.ok]))
+    await client.get('https://example.test/1')
+    await client.get('https://example.test/2')
+    stop()
+    await client.get('https://example.test/3')
+    expect(heard).toEqual([[200, true], [404, false]])
+  })
+
+  it('hears nothing from a request that never got an answer', async () => {
+    const { impl } = scriptedFetch([new Error('network down')])
+    const client = new HttpClient({ fetchImpl: impl, minIntervalMs: 0, retries: 0, ...fakeClock() })
+    let heard = 0
+    const stop = onEveryResponse(() => heard++)
+    await expect(client.get('https://example.test/x')).rejects.toThrow()
+    stop()
+    expect(heard).toBe(0)
+  })
+})
+
+// A circuit that opens must say WHY. Lidl Belgium opened it on its first page
+// for a night, and the log said only "circuit open": the reason -- Node refusing
+// a 20 KB header -- was one line away and never written.
+describe('why a circuit opened', () => {
+  it('carries the last failure that opened it', async () => {
+    const { impl } = scriptedFetch([new Error('Headers Overflow Error')])
+    const client = new HttpClient({ fetchImpl: impl, minIntervalMs: 0, retries: 0, tripAfter: 1, ...fakeClock() })
+    await expect(client.get('https://example.test/p/1')).rejects.toSatisfy(
+      (error: unknown) => error instanceof CircuitOpenError && /Headers Overflow Error/.test(error.message),
+    )
+  })
+
+  it('names the status when the host answered with one', async () => {
+    const { impl } = scriptedFetch([503])
+    const client = new HttpClient({ fetchImpl: impl, minIntervalMs: 0, retries: 0, tripAfter: 1, ...fakeClock() })
+    await expect(client.get('https://example.test/p/1')).rejects.toThrow(/503/)
+  })
+})
+
+// lidl.be sends a 20 KB Content-Security-Policy with every product page, and
+// Node's fetch refuses headers over 16 KB by default -- every page failed, and
+// the crawl stopped at zero. The limit is raised where every scrape starts.
+describe('the header limit', () => {
+  it('is raised in every script that starts a scrape', async () => {
+    const { readFileSync } = await import('node:fs')
+    const scripts = JSON.parse(readFileSync('package.json', 'utf8')).scripts as Record<string, string>
+    const scrapes = Object.entries(scripts).filter(([, cmd]) => cmd.includes('src/cli/scrape.ts'))
+    expect(scrapes.length).toBeGreaterThan(0)
+    for (const [name, cmd] of scrapes) {
+      expect(cmd, name).toMatch(/--max-http-header-size=\d{5,}/)
+    }
   })
 })

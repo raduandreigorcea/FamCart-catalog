@@ -11,7 +11,7 @@
 begin;
 -- 41: the coverage-authority block added six assertions to the thirty-five that
 -- were here, and the plan was bumped by seven.
-select plan(41);
+select plan(48);
 
 delete from public.catalog_scrape_runs;
 delete from public.catalog_listings;
@@ -269,6 +269,36 @@ select is((select count(*)::int from public.catalog_listings l
              join public.catalog_retailers r on r.id = l.retailer_id
             where r.slug = 'lidl'), 3,
   'and nothing was deleted by any of it -- gone from the shelf is not gone from the catalog');
+
+-- ─── the sign of life (022) ─────────────────────────────────────────────────
+-- Separate from what a run imported, because a crawl can read for hours and
+-- import nothing, and the page must still be able to tell it from a dead one.
+select public.catalog_run_open('lidl') as run_id \gset al_
+select is((select last_alive_at from public.catalog_scrape_runs where id = :'al_run_id'), null,
+  'a run has no sign of life until the scraper reports one');
+select public.catalog_run_alive(:'al_run_id'::uuid, 40);
+select public.catalog_run_alive(:'al_run_id'::uuid, 2);
+select is((select pages_read from public.catalog_scrape_runs where id = :'al_run_id'), 42,
+  'each report adds the pages read since the last one');
+select isnt((select last_alive_at from public.catalog_scrape_runs where id = :'al_run_id'), null,
+  'and stamps when the shop was last heard from');
+select public.catalog_run_alive(:'al_run_id'::uuid, 0, 30, 3551, 'departments');
+select is(
+  (select array[progress_done::text, progress_total::text, progress_unit]
+     from public.catalog_scrape_runs where id = :'al_run_id'),
+  array['30', '3551', 'departments'],
+  'and how far the crawl is through its own plan, in its own unit');
+select is((select pages_read from public.catalog_scrape_runs where id = :'al_run_id'), 42,
+  'a report with no pages leaves the page count alone');
+select public.catalog_run_fail(:'al_run_id'::uuid, 'stopped for the test');
+select public.catalog_run_alive(:'al_run_id'::uuid, 100);
+select is((select pages_read from public.catalog_scrape_runs where id = :'al_run_id'), 42,
+  'a closed run ignores a late report, so a finished run never looks alive');
+
+set local role authenticated;
+select throws_ok($$select public.catalog_run_alive('00000000-0000-0000-0000-000000000000'::uuid, 1)$$,
+  '42501', null, 'only the scraper may say a run is alive');
+reset role;
 
 select * from finish();
 rollback;

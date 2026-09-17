@@ -1,7 +1,7 @@
 -- The admin surface. Two things worth testing: that every door is locked, and
 -- that the filters narrow the thing they claim to narrow.
 begin;
-select plan(27);
+select plan(37);
 
 delete from public.catalog_scrape_runs;
 delete from public.catalog_listings;
@@ -125,6 +125,52 @@ select is(
   'and so is each shop''s listing count');
 select isnt(public.catalog_stats() ->> 'counted_at', null,
   'and the report says when it was counted, so the page can say how old it is');
+
+-- Per country, for the Scrapers page's country selector. Every shop in this
+-- fixture is Romanian, so Romania's counts are the listings' counts.
+select is((public.catalog_stats() -> 'countries' -> 'RO' ->> 'listings')::bigint,
+  (select count(*) from public.catalog_listings l join public.catalog_retailers r on r.id = l.retailer_id
+    where r.country = 'RO'),
+  'a country counts the listings of every shop selling there');
+select is((public.catalog_stats() -> 'countries' -> 'RO' ->> 'unavailable')::bigint,
+  (select count(*) from public.catalog_listings l join public.catalog_retailers r on r.id = l.retailer_id
+    where r.country = 'RO' and not l.available),
+  'and the ones out of stock');
+select is((public.catalog_stats() -> 'countries' -> 'RO' ->> 'products')::bigint,
+  (select count(distinct l.product_id) from public.catalog_listings l
+     join public.catalog_retailers r on r.id = l.retailer_id where r.country = 'RO'),
+  'a product sold by two shops in one country is one product there');
+select is((public.catalog_stats() -> 'countries' -> 'RO' ->> 'with_barcode')::bigint,
+  (select count(distinct l.product_id) from public.catalog_listings l
+     join public.catalog_retailers r on r.id = l.retailer_id
+    where r.country = 'RO'
+      and exists (select 1 from public.catalog_identifiers i where i.product_id = l.product_id)),
+  'and a country counts the products carrying a barcode');
+select is(public.catalog_stats() -> 'countries' -> 'IT', null,
+  'a country with no listings is absent rather than a row of zeros');
+
+-- For the Health page: the catalog's own size, each shop's name, and the last
+-- run's sign of life.
+select ok((public.catalog_stats() ->> 'database_size')::bigint > 0,
+  'the report carries the catalog database''s size');
+select is(
+  (select x ->> 'name' from jsonb_array_elements(public.catalog_stats() -> 'retailers') x
+    where x ->> 'slug' = 'mega-image'),
+  'Mega Image',
+  'and each shop''s own name, not only its slug');
+select ok(
+  (select (x -> 'last_run') ? 'last_alive_at' from jsonb_array_elements(public.catalog_stats() -> 'retailers') x
+    where x ->> 'slug' = 'auchan'),
+  'and whether a shop''s last run has shown a sign of life');
+select is(
+  (select (x -> 'last_run' ->> 'id')::uuid from jsonb_array_elements(public.catalog_stats() -> 'retailers') x
+    where x ->> 'slug' = 'auchan'),
+  :'a_run_id'::uuid,
+  'and the last run''s id, so the page can link to that run');
+select ok(
+  (select (x -> 'last_run') ? 'stats' from jsonb_array_elements(public.catalog_stats() -> 'retailers') x
+    where x ->> 'slug' = 'auchan'),
+  'and its stats, which say whether a partial run was partial on purpose');
 
 -- The refresh counts the whole catalog; a signed-in caller must not be able to
 -- make it do that on demand.

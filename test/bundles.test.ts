@@ -43,6 +43,21 @@ describe('isBundle', () => {
     expect(isBundle('Pălincă de prune, 0.5 l + 2 pahare')).toBe(true)
   })
 
+  // Found in the live catalog on 2026-09-17, after the rule had run for two
+  // days: an object it did not know, a drink it did not recognise by name, and a
+  // snack sold with a bowl.
+  it('catches what slipped through: a hat, a glass after the quantity, a bowl', () => {
+    expect(isBundle('Metaxa 12* 0.7L + Caciula')).toBe(true)
+    expect(isBundle('Dictador 10 Years + pahar 0.7L')).toBe(true)
+    expect(isBundle('Pachet 2 x Chipsuri cu sare Chio, 125 g + bol')).toBe(true)
+  })
+
+  it('still keeps a cup sold with a bowl, and clothes are not its business', () => {
+    expect(isBundle('Set cana, 350 ml + bol, 500 ml Actuel, portelan, model 3D caprioara')).toBe(false)
+    expect(isBundle('Set caciula + fular bebe 0/24 luni')).toBe(false)
+    expect(isBundle('Pachet spuma autobronzanta + manusa Dove Dark, 150 ml')).toBe(false)
+  })
+
   it('leaves a plain product alone', () => {
     expect(isBundle('Whisky Jack Daniel\'s Tennessee, 0.7 l')).toBe(false)
   })
