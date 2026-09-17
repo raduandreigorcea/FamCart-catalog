@@ -193,6 +193,48 @@ export class CarrefourScraper implements RetailerScraper {
       return
     }
 
+    // REMOVALS ONLY: the cleanup a nightly run never gets to. The groceries are
+    // not read again; the pass that read them all is trusted through the ids it
+    // saw (ctx.removalsOnly.groceryIds, refused when implausibly few), and only
+    // the departments outside groceries are read. What they show that the
+    // grocery pass did not see is outside groceries and is removed. Nothing is
+    // imported, and nothing about coverage is concluded.
+    //
+    // Sliceable, unlike a normal run: removal acts on positive evidence, so half
+    // of the departments tonight and half tomorrow lose nothing.
+    if (ctx.removalsOnly) {
+      const known = ctx.removalsOnly.groceryIds
+      const slice = ctx.shard ? others.filter((_, i) => i % ctx.shard!.of === ctx.shard!.index) : others
+      const counters = { departments: 0, pages: 0, unreadable: 0, emitted: 0 }
+      const reported = new Set<string>()
+      ctx.log.info('carrefour: removals only', {
+        departments: slice.length,
+        of: others.length,
+        groceriesKnown: known.size,
+      })
+      try {
+        for await (const product of crawlDepartments({
+          http,
+          ctx,
+          departments: slice,
+          counters,
+          total: slice.length,
+          isGrocery: () => false,
+          onOutside: async (id) => {
+            if (known.has(id) || reported.has(id)) return
+            reported.add(id)
+            await ctx.reportExcluded?.(id)
+          },
+        })) {
+          // Never reached: a department outside groceries yields nothing.
+          yield product
+        }
+      } finally {
+        ctx.log.info('carrefour: removals finished', { ...counters, removed: reported.size })
+      }
+      return
+    }
+
     // THE CRAWL CHECKS ITS OWN COVERAGE, and this is the part that earns it the
     // right to sweep.
     //
