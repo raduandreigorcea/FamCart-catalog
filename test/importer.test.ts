@@ -331,7 +331,7 @@ describe('the sign of life', () => {
     await run.open()
     await run.alive(12)
     expect(calls.filter((c) => c.name === 'catalog_run_alive')).toEqual([
-      { name: 'catalog_run_alive', args: { p_run_id: 'run-1', p_pages: 12 } },
+      { name: 'catalog_run_alive', args: { p_run_id: 'run-1', p_pages: 12, p_done: null, p_total: null, p_unit: null } },
     ])
   })
 
@@ -385,6 +385,29 @@ describe('the sign of life', () => {
     const alive = calls.filter((c) => c.name === 'catalog_run_alive')
     expect(alive).toHaveLength(1)
     expect(alive[0].args.p_pages).toBe(0)
+  })
+
+  // The progress bar's numbers travel with the sign of life: the latest the
+  // scraper reported, once a minute, never one report per page.
+  it('carries the latest progress with each report', async () => {
+    vi.useFakeTimers()
+    const { db, calls } = fakeDb(OPEN)
+    const run = new ScrapeRun(db, 'auchan', testLogger())
+    await run.open()
+    const client = new HttpClient({
+      fetchImpl: (async () => new Response('x', { status: 200 })) as unknown as typeof fetch,
+      minIntervalMs: 0,
+      sleep: async () => {},
+    })
+    let progress: { done: number; total: number; unit: string } | null = { done: 3, total: 10, unit: 'pages' }
+    const stop = watchLiveness(run, 60_000, () => progress)
+    await client.get('https://example.test/1')
+    progress = { done: 4, total: 10, unit: 'pages' }
+    await vi.advanceTimersByTimeAsync(60_000)
+    await stop()
+    const alive = calls.filter((c) => c.name === 'catalog_run_alive')
+    expect(alive).toHaveLength(1)
+    expect(alive[0].args).toMatchObject({ p_done: 4, p_total: 10, p_unit: 'pages' })
   })
 
   it('sends what is left when it is stopped', async () => {

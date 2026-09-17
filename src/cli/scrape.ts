@@ -15,6 +15,7 @@ import process from 'node:process'
 import { createLogger } from '../core/logger.ts'
 import { SCRAPERS, scraperFor, IMPLEMENTED } from '../core/registry.ts'
 import { ScrapeRun, connect, BATCH_SIZE, watchLiveness } from '../importer/run.ts'
+import type { RunProgress } from '../importer/run.ts'
 import type { CatalogDb } from '../importer/run.ts'
 import type { RetailerScraper } from '../core/types.ts'
 import { loadEnvFiles } from './env.ts'
@@ -121,10 +122,11 @@ async function scrapeOne(
   // soon as the crawl ends, while the run is still open to receive it: a run
   // that has been closed ignores it.
   let stopLiveness: (() => Promise<void>) | null = null
+  let progress: RunProgress | null = null
 
   try {
     await run.open()
-    stopLiveness = watchLiveness(run)
+    stopLiveness = watchLiveness(run, 60_000, () => progress)
 
     let sinceLastBeat = 0
     for await (const product of scraper.discoverProducts({
@@ -135,6 +137,9 @@ async function scrapeOne(
       signal: controller.signal,
       reportIncomplete: (reason) => {
         incomplete ??= reason
+      },
+      reportProgress: (done, total, unit) => {
+        progress = { done, total, unit }
       },
       reportCoverage: (seen, advertised) => {
         coverage = { seen, advertised }

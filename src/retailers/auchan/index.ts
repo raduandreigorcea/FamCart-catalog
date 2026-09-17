@@ -125,6 +125,13 @@ export class AuchanScraper implements RetailerScraper {
       if (ctx.limit && ++emitted >= ctx.limit) return
     }
 
+    // Progress in slices: the unfiltered one plus every category known so far.
+    // The total GROWS as products name categories nobody had seen, so the bar
+    // on the Scrapers page can step back early on. It is still the truth, and
+    // it settles once the tree has been learned.
+    let slicesRead = 1
+    ctx.reportProgress?.(slicesRead, queuedPaths.size + 1, 'categories')
+
     while (frontier.length > 0) {
       if (ctx.signal?.aborted) return
       const path = frontier.shift() as string
@@ -132,6 +139,8 @@ export class AuchanScraper implements RetailerScraper {
         yield product
         if (ctx.limit && ++emitted >= ctx.limit) return
       }
+      slicesRead++
+      ctx.reportProgress?.(slicesRead, queuedPaths.size + 1, 'categories')
     }
 
     ctx.log.info('auchan crawl finished', {

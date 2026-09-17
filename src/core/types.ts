@@ -107,6 +107,17 @@ export interface ScrapeContext {
    */
   reportCoverage?: (seen: number, advertised: number) => void
   /**
+   * How far the crawl is through its OWN plan, in a unit it names: "pages" of a
+   * sitemap, Carrefour's "departments", the Auchan "categories" found so far.
+   *
+   * For the Scrapers page's progress bar, which used to estimate from the
+   * shop's last completed run -- which a first run does not have and Carrefour
+   * never has, so those showed no bar at all. A plan can grow while the crawl
+   * learns (Auchan does), so a bar may step back; it is still the truth.
+   * Called often; the CLI keeps the latest and reports it once a minute.
+   */
+  reportProgress?: (done: number, total: number, unit: string) => void
+  /**
    * Say that the shop files this listing OUTSIDE GROCERIES: a t-shirt, a drill,
    * a bunch of flowers. It is not imported, and the importer removes whatever an
    * earlier run imported under the same id (catalog_purge_listings).

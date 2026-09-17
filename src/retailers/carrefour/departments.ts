@@ -113,6 +113,12 @@ export async function* crawlDepartments(options: {
    * when the job is killed is a removal lost.
    */
   onOutside?: (externalId: string) => void | Promise<void>
+  /**
+   * Every department the whole run will read, across both passes, for the
+   * progress report. The counters carry on between the passes, so the two calls
+   * report against one total.
+   */
+  total?: number
 }): AsyncGenerator<RetailerProduct> {
   const { http, ctx, departments, counters } = options
   const yielded = new Set<string>()
@@ -181,5 +187,6 @@ export async function* crawlDepartments(options: {
         ctx.log.info('carrefour: crawling departments', { ...counters })
       }
     }
+    if (options.total) ctx.reportProgress?.(counters.departments, options.total, 'departments')
   }
 }
