@@ -242,6 +242,8 @@ export class CarrefourScraper implements RetailerScraper {
         ctx: crawlCtx,
         departments: groceries,
         counters,
+        // One plan for the night: the groceries and then everything else.
+        total: groceries.length + others.length,
         onSeen: (id) => seen.add(id),
       })) {
         kept.add(product.externalId)
@@ -261,6 +263,7 @@ export class CarrefourScraper implements RetailerScraper {
         ctx: crawlCtx,
         departments: others,
         counters,
+        total: groceries.length + others.length,
         isGrocery: () => false,
         onSeen: (id) => seen.add(id),
         onOutside: async (id) => {

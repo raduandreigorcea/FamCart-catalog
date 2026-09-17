@@ -297,11 +297,14 @@ export class ScrapeRun {
    * crawl can read for hours without importing one. Never throws: a crawl must
    * not die because the dashboard could not be told it is working.
    */
-  async alive(pages: number): Promise<void> {
+  async alive(pages: number, progress: RunProgress | null = null): Promise<void> {
     if (this.dryRun || !this.runId) return
     const { error } = await this.db.rpc('catalog_run_alive', {
       p_run_id: this.runId,
       p_pages: pages,
+      p_done: progress?.done ?? null,
+      p_total: progress?.total ?? null,
+      p_unit: progress?.unit ?? null,
     })
     if (error) this.log.warn('sign of life could not be recorded', { error: describe(error) })
   }
@@ -424,7 +427,20 @@ function describe(error: unknown): string {
  *
  * Returns a stop function that sends what the last partial minute heard.
  */
-export function watchLiveness(run: ScrapeRun, intervalMs = 60_000): () => Promise<void> {
+/** How far a crawl is through its own plan (ScrapeContext.reportProgress). */
+export interface RunProgress {
+  done: number
+  total: number
+  unit: string
+}
+
+export function watchLiveness(
+  run: ScrapeRun,
+  intervalMs = 60_000,
+  // The latest the scraper reported, read at each report rather than pushed on
+  // every page: a sitemap crawl reports tens of thousands of times a night.
+  progress: () => RunProgress | null = () => null,
+): () => Promise<void> {
   let heard = 0
   let pages = 0
   const unsubscribe = onEveryResponse((notice) => {
@@ -438,7 +454,8 @@ export function watchLiveness(run: ScrapeRun, intervalMs = 60_000): () => Promis
     const count = pages
     heard = 0
     pages = 0
-    pending = pending.then(() => run.alive(count))
+    const latest = progress()
+    pending = pending.then(() => run.alive(count, latest))
   }
 
   const timer = setInterval(report, intervalMs)
