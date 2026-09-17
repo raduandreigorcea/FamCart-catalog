@@ -276,7 +276,15 @@ export class ScrapeRun {
       p_products_valid: this.totals.valid - this.reportedValid,
       p_products_rejected: this.totals.rejected - this.reportedRejected,
       p_error_count: 0,
-      p_stats: { rejections: this.totals.rejections },
+      // What the run REMOVED, beside what it rejected. A removals-only run
+      // imports nothing, and its row said 0, 0, 0 after deleting thousands:
+      // the counts were in the job's log and nowhere the Scrapers page reads.
+      p_stats: {
+        rejections: this.totals.rejections,
+        excluded: this.totals.excluded,
+        purged_listings: this.totals.purgedListings,
+        purged_products: this.totals.purgedProducts,
+      },
     })
     if (error) {
       this.log.warn('progress could not be recorded', { error: describe(error) })
@@ -455,7 +463,9 @@ export function watchLiveness(
     heard = 0
     pages = 0
     const latest = progress()
-    pending = pending.then(() => run.alive(count, latest))
+    // The counters too, once a minute: heartbeat() otherwise only runs every
+    // 500 imported products, and a run that removes imports none.
+    pending = pending.then(() => run.alive(count, latest)).then(() => run.heartbeat())
   }
 
   const timer = setInterval(report, intervalMs)

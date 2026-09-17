@@ -410,6 +410,28 @@ describe('the sign of life', () => {
     expect(alive[0].args).toMatchObject({ p_done: 4, p_total: 10, p_unit: 'pages' })
   })
 
+  // The removals belong in the run row, where the Scrapers page reads a run --
+  // not only in the job's log. A removals-only run imports nothing, so without
+  // this its row said 0, 0, 0 after deleting thousands.
+  it('records what the run removed in its stats, as it goes', async () => {
+    vi.useFakeTimers()
+    const { db, calls } = fakeDb({ ...OPEN, catalog_purge_listings: { listings_deleted: 7, products_deleted: 5 } })
+    const run = new ScrapeRun(db, 'carrefour', testLogger())
+    await run.open()
+    const client = new HttpClient({
+      fetchImpl: (async () => new Response('x', { status: 200 })) as unknown as typeof fetch,
+      minIntervalMs: 0,
+      sleep: async () => {},
+    })
+    const stop = watchLiveness(run, 60_000)
+    for (let i = 0; i < 100; i++) await run.exclude(`id-${i}`)
+    await client.get('https://example.test/1')
+    await vi.advanceTimersByTimeAsync(60_000)
+    const progress = calls.filter((c) => c.name === 'catalog_run_progress').at(-1)
+    expect(progress?.args.p_stats).toMatchObject({ excluded: 100, purged_listings: 7, purged_products: 5 })
+    await stop()
+  })
+
   it('sends what is left when it is stopped', async () => {
     vi.useFakeTimers()
     const { db, calls } = fakeDb(OPEN)
