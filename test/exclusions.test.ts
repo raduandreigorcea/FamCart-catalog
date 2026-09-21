@@ -14,6 +14,7 @@ import { describe, it, expect } from 'vitest'
 import { fixtureFetch, callsOf, collect, testLogger } from './helpers.ts'
 import { isAuchanGrocery } from '../src/retailers/auchan/vtex.ts'
 import { carrefourDepartmentIsGrocery } from '../src/retailers/carrefour/departments.ts'
+import { carrefourDepartmentsFrom } from '../src/retailers/carrefour/index.ts'
 import { megaImageIsGrocery } from '../src/retailers/mega-image/index.ts'
 import { SCRAPERS } from '../src/core/registry.ts'
 
@@ -53,6 +54,15 @@ describe('auchan: the category path', () => {
 })
 
 describe('carrefour: the department', () => {
+  it('reads neither the home page nor a product page as a department', () => {
+    expect(carrefourDepartmentsFrom([
+      'https://carrefour.ro/',
+      'https://carrefour.ro',
+      'https://carrefour.ro/prajitor-de-paine-19-41503994/',
+      'https://carrefour.ro/bacanie-carrefour/',
+    ])).toEqual(['https://carrefour.ro/bacanie-carrefour/'])
+  })
+
   it('keeps the grocery departments', () => {
     expect(carrefourDepartmentIsGrocery('https://carrefour.ro/bacanie-carrefour/alimente/cafea')).toBe(true)
     expect(carrefourDepartmentIsGrocery('https://carrefour.ro/bacanie-carrefour/')).toBe(true)
