@@ -45,8 +45,8 @@ jobs:
   # Auchan is a paged API -- 50 products per call, so ~60,000 products is about
   # 1,200 requests. Lidl is 511 pages. Carrefour reads department listings at
   # 24 products a request. Mega Image is 8,879 product pages, one request each,
-  # and is the only one of the four whose sitemap dates its entries -- so after
-  # the first full night it fetches what moved rather than all of them. All four
+  # all of them every night: its sitemap dates its entries, but a run given
+  # --since reads a fraction of the shop and so could never sweep. All four
   # crawl the whole shop, and a run that closes as `completed` is allowed to
   # sweep -- which is the only path by which anything is ever marked as no longer
   # sold. Carrefour does not close that way yet; see the note at the end.
@@ -54,12 +54,14 @@ jobs:
     name: ${{ matrix.retailer }}
     runs-on: ubuntu-latest
     strategy:
-      # Sequential, not parallel. They are different hosts, so politeness does
-      # not require it -- but one shop failing must not take the other down with
-      # it, and two crawls writing at once is two run rows to read instead of
-      # one. Lidl first because it is ten minutes: if the credentials are wrong,
-      # that is when you find out.
-      max-parallel: 1
+      # All four at once, since 2026-09-21. They are four hosts, and the rate
+      # limit and circuit breaker in core/http.ts are per host, so politeness
+      # never required one at a time. Sequential cost the whole chain: Mega Image
+      # running long on 2026-09-21 held Auchan and Carrefour in the queue for six
+      # hours, so Romania's prices were the last thing the night delivered.
+      # fail-fast stays off, so one shop failing still takes nobody down, and
+      # wrong credentials still show within minutes, in all four at once.
+      max-parallel: 4
       fail-fast: false
       matrix:
         retailer: [lidl, mega-image, auchan, carrefour]
@@ -108,30 +110,19 @@ jobs:
         run: npm run scrape -- ${{ matrix.retailer }} $SCRAPE_MODE
 
   # ─── the shops abroad ───────────────────────────────────────────────────────
-  # A SECOND JOB RATHER THAN MORE ROWS IN THE MATRIX ABOVE, and the reason is
-  # `max-parallel: 1`. The Romanian chain measured ~9 hours on 2026-09-16 --
-  # Mega Image 4.5, Carrefour's 5-hour ceiling, the rest -- so eighteen more
-  # shops appended to it would not be reached before the next night started
-  # them again from the top. Lidl Romania would run every night and Delhaize
-  # never, and nothing would say so: a shop that is never reached looks exactly
-  # like a shop with nothing to report.
-  #
-  # PARALLEL HERE, SEQUENTIAL THERE, and that is not an inconsistency. The
-  # reasons for one-at-a-time above are about reading the result -- one run row
-  # in flight, one shop's failure not confusing another's -- and they cost
-  # nothing when four shops take nine hours. Eighteen shops on eighteen
-  # different hosts is where that price becomes the whole assortment. Politeness
-  # is unaffected either way: the rate limit and the circuit breaker in
-  # core/http.ts are per HOST, and no two of these share one.
+  # A SECOND JOB RATHER THAN MORE ROWS IN THE MATRIX ABOVE. It was born when
+  # the Romanian chain ran one shop at a time (~9 hours on 2026-09-16), so
+  # eighteen more appended to it would never have been reached. Both run in
+  # parallel now; the split stays because the two differ in ceiling and in
+  # flags, and because a Romanian shop should never queue behind eighteen
+  # others. Politeness is per HOST (core/http.ts), and no two shops share one.
   #
   # Five at a time, not eighteen: the free plan allows 20 concurrent jobs across
-  # the account, and the chain above is already holding one.
+  # the account, and the four above take four of them.
   #
-  # NONE OF THESE HAS EVER RUN AGAINST THE LIVE SITE. Every fixture was captured
-  # by hand and every test runs off it, so the first scheduled run is the first
-  # real evidence. What that can cost is bounded on purpose: a run that finds
-  # nothing is refused, a first run has no previous run to compare against and
-  # so may not sweep, and an import only ever says "I saw this, now".
+  # Live since 2026-09-17. What a bad night can cost is bounded on purpose: a
+  # run that finds nothing is refused, and an import only ever says "I saw
+  # this, now".
   abroad:
     name: ${{ matrix.retailer }}
     runs-on: ubuntu-latest
