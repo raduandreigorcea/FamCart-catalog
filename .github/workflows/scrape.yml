@@ -177,7 +177,19 @@ jobs:
         env:
           CATALOG_SUPABASE_URL: ${{ secrets.CATALOG_SUPABASE_URL }}
           CATALOG_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CATALOG_SUPABASE_SERVICE_ROLE_KEY }}
-        run: npm run scrape -- ${{ matrix.retailer }}
+          # THIRDS, ONE A NIGHT, for the two shops too big for one job. Measured
+          # 2026-09-18..20: Carrefour Italia is 26,792 pages at ~1.1 s and Delhaize
+          # 14,685 at 1.7-2.7 s, so both were killed at the ceiling every night,
+          # read red, and never closed. A third is ~3 hours for either. The slice
+          # rotates by day of the year, so every product is refreshed every third
+          # night, and the run closes as a deliberate partial. The price is the
+          # same as Carrefour Romania's: these two never sweep.
+          SCRAPE_SLICES: ${{ (matrix.retailer == 'carrefour-it' || matrix.retailer == 'delhaize') && '3' || '' }}
+        run: |
+          if [ -n "$SCRAPE_SLICES" ]; then
+            set -- --shard "$(( 10#$(date -u +%j) % SCRAPE_SLICES + 1 ))/$SCRAPE_SLICES"
+          fi
+          npm run scrape -- ${{ matrix.retailer }} "$@"
 
   # Carrefour used to live in its own job, cut into fourteen nightly slices,
   # because 85,119 product pages is about forty-five hours of polite fetching
