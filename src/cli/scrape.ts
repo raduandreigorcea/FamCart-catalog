@@ -134,7 +134,9 @@ async function scrapeOne(
     removalsOnly = { groceryIds }
   }
 
-  const run = new ScrapeRun(db as CatalogDb, scraper.retailer, log, args.dryRun || !db)
+  const run = new ScrapeRun(db as CatalogDb, scraper.retailer, log, args.dryRun || !db, {
+    removalsOnly: args.removalsOnly,
+  })
   const controller = new AbortController()
   const onSignal = (): void => controller.abort()
   process.once('SIGINT', onSignal)

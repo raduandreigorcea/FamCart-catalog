@@ -67,6 +67,12 @@ export interface ScrapeRunOptions {
   /** Injected by tests, which should not wait a minute and a half. */
   sleep?: (ms: number) => Promise<void>
   retryDelaysMs?: readonly number[]
+  /**
+   * A job that only deletes (`--removals-only`). Said in the stats from the
+   * first sign of life, so the Scrapers page can call it a removal job while it
+   * runs, not only once it has closed.
+   */
+  removalsOnly?: boolean
 }
 
 export interface CatalogDb {
@@ -103,6 +109,7 @@ export class ScrapeRun {
   private readonly dryRun: boolean
   private readonly sleep: (ms: number) => Promise<void>
   private readonly retryDelaysMs: readonly number[]
+  private readonly removalsOnly: boolean
 
   constructor(
     db: CatalogDb,
@@ -117,6 +124,7 @@ export class ScrapeRun {
     this.dryRun = dryRun
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
     this.retryDelaysMs = options.retryDelaysMs ?? RETRY_DELAYS_MS
+    this.removalsOnly = options.removalsOnly ?? false
   }
 
   async open(): Promise<void> {
@@ -285,6 +293,7 @@ export class ScrapeRun {
         purged_listings: this.totals.purgedListings,
         purged_products: this.totals.purgedProducts,
         ...(this.deliberate ? { deliberate: true } : {}),
+        ...(this.removalsOnly ? { removals_only: true } : {}),
       },
     })
     if (error) {
