@@ -332,6 +332,16 @@ describe('a deliberate partial run', () => {
     const stats = calls.filter((c) => c.name === 'catalog_run_progress').at(-1)?.args.p_stats
     expect(stats).toMatchObject({ deliberate: true })
   })
+
+  it('says it is a removal job from its first sign of life', async () => {
+    const { db, calls } = fakeDb(OPEN)
+    const run = new ScrapeRun(db, 'carrefour', testLogger(), false, { removalsOnly: true })
+    await run.open()
+    await run.heartbeat()
+    const stats = calls.filter((c) => c.name === 'catalog_run_progress').at(-1)?.args.p_stats
+    expect(stats).toMatchObject({ removals_only: true })
+    expect(stats).not.toHaveProperty('deliberate')
+  })
 })
 
 describe('the sign of life', () => {

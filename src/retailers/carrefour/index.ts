@@ -108,6 +108,18 @@ export function buildProduct(product: JsonLdProduct, url: string): RetailerProdu
   }
 }
 
+/**
+ * The department pages among the sitemap's URLs.
+ *
+ * NOT THE HOME PAGE, which the sitemap lists too. It holds no listing payload,
+ * so reading it as a department reported the run incomplete: both removal runs
+ * of 2026-09-17 did their work and closed red on it.
+ */
+export function carrefourDepartmentsFrom(locs: string[]): string[] {
+  const isProduct = (loc: string): boolean => /-\d{5,}\/?$/.test(loc.replace(/\?.*$/, ''))
+  return locs.filter((loc) => loc.startsWith(ORIGIN) && new URL(loc).pathname !== '/' && !isProduct(loc))
+}
+
 export class CarrefourScraper implements RetailerScraper {
   readonly retailer = 'carrefour'
   readonly country: Market = 'RO'
@@ -152,10 +164,7 @@ export class CarrefourScraper implements RetailerScraper {
     // product pages at the root -- carrefour.ro/prajitor-de-paine-...-19-41503994/
     // is a toaster, not an aisle. Those were crawled as departments, found to
     // have no listing payload, and counted as pages we could not read.
-    const isProduct = (loc: string): boolean => /-\d{5,}\/?$/.test(loc.replace(/\?.*$/, ''))
-    const departments = entries
-      .map((entry) => entry.loc)
-      .filter((loc) => loc.startsWith(ORIGIN) && !isProduct(loc))
+    const departments = carrefourDepartmentsFrom(entries.map((entry) => entry.loc))
 
     if (departments.length === 0) {
       // The sitemap answered and held no departments at all. Not an empty shop:
