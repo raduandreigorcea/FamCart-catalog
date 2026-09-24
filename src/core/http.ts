@@ -118,6 +118,12 @@ export class HttpClient {
     return state !== undefined && state.openUntil > this.now()
   }
 
+  /** Sleep until the host's circuit closes, for a crawl that would rather pause than end. */
+  async waitOutCircuit(url: string): Promise<void> {
+    const wait = (this.hosts.get(hostOf(url))?.openUntil ?? 0) - this.now()
+    if (wait > 0) await this.sleep(wait)
+  }
+
   /**
    * Fetch a URL, politely.
    *
