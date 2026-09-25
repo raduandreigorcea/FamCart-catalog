@@ -2,7 +2,7 @@
 -- write, only a catalog admin can read (Realtime applies the same policy), and
 -- the listings a run touched are found by the stamps the importer leaves.
 begin;
-select plan(14);
+select plan(15);
 
 delete from public.catalog_scrape_runs;
 delete from public.catalog_listings;
@@ -56,6 +56,19 @@ select public.catalog_import_listings($j$[
 select public.catalog_run_progress(:'s_run_id'::uuid, 2, 2, 0, 0);
 select public.catalog_run_complete(:'s_run_id'::uuid, true);
 
+-- A third night, the same two listings: it swept nothing new. A2 went in the
+-- second run and must not be listed again under every run after it.
+select public.catalog_run_open('auchan') as run_id \gset u_
+update public.catalog_scrape_runs set started_at = now() - interval '30 minutes' where id = :'u_run_id';
+select public.catalog_import_listings($j$[
+  {"external_id":"A1","name":"Apa plata Dorna 2L","price":5.49,"currency":"RON",
+   "product_url":"https://www.auchan.ro/p/a1","available":true},
+  {"external_id":"A3","name":"Paine alba 500g","price":4.49,"currency":"RON",
+   "product_url":"https://www.auchan.ro/p/a3","available":true}
+]$j$::jsonb, 'auchan', :'u_run_id'::uuid);
+select public.catalog_run_progress(:'u_run_id'::uuid, 2, 2, 0, 0);
+select public.catalog_run_complete(:'u_run_id'::uuid, true);
+
 -- ─── every door is locked ────────────────────────────────────────────────────
 set local role authenticated;
 select is((select count(*)::int from public.catalog_run_logs), 0,
@@ -82,6 +95,9 @@ select results_eq(
 select results_eq(
   format('select external_id from public.catalog_admin_run_listings(%L::uuid, %L)', :'s_run_id', 'gone'),
   $$values ('A2')$$, 'gone: swept by this completed run');
+select is(
+  (select count(*)::int from public.catalog_admin_run_listings(:'u_run_id'::uuid, 'gone')),
+  0, 'and not by every completed run after it');
 reset role;
 
 -- ─── a deleted run takes its log with it ─────────────────────────────────────

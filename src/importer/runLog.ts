@@ -20,37 +20,41 @@ import type { LogLine } from '../core/logger.ts'
 export const LOG_BATCH = 100
 export const LOG_INTERVAL_MS = 2_000
 /**
- * Info lines kept per run. A night's normal crawl writes a few hundred; the cap
- * is for the bad night where a line per failed page would fill a free-plan
- * database. Warnings and errors are never capped: they are what the page is for.
+ * Lines kept per run, by level. A night's normal crawl writes a few hundred;
+ * the caps are for the bad night that would otherwise fill a free-plan
+ * database. Warnings get a far higher one because they are what the page is
+ * for, but they are capped too: a shop refusing every page writes a warning per
+ * page (auchan, carrefour/departments). Errors are never capped; a run ends on
+ * a handful of them.
  */
 export const MAX_INFO_LINES = 5_000
+export const MAX_WARN_LINES = 20_000
 
 export class RunLogShipper {
   private runId: string | null = null
   private queue: LogLine[] = []
-  private infoKept = 0
-  private infoDropped = 0
+  private readonly kept = { info: 0, warn: 0 }
+  private readonly dropped = { info: 0, warn: 0 }
   private timer: ReturnType<typeof setInterval> | null = null
   private sending: Promise<void> = Promise.resolve()
   private complained = false
   private readonly db: CatalogDb
   private readonly intervalMs: number
-  private readonly maxInfo: number
+  private readonly max: { info: number; warn: number }
 
-  constructor(db: CatalogDb, options: { intervalMs?: number; maxInfo?: number } = {}) {
+  constructor(db: CatalogDb, options: { intervalMs?: number; maxInfo?: number; maxWarn?: number } = {}) {
     this.db = db
     this.intervalMs = options.intervalMs ?? LOG_INTERVAL_MS
-    this.maxInfo = options.maxInfo ?? MAX_INFO_LINES
+    this.max = { info: options.maxInfo ?? MAX_INFO_LINES, warn: options.maxWarn ?? MAX_WARN_LINES }
   }
 
   push(line: LogLine): void {
-    if (line.level === 'info') {
-      if (this.infoKept >= this.maxInfo) {
-        this.infoDropped++
+    if (line.level !== 'error') {
+      if (this.kept[line.level] >= this.max[line.level]) {
+        this.dropped[line.level]++
         return
       }
-      this.infoKept++
+      this.kept[line.level]++
     }
     this.queue.push(line)
     if (this.runId && this.queue.length >= LOG_BATCH) void this.send()
@@ -68,14 +72,15 @@ export class RunLogShipper {
   async close(): Promise<void> {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
-    if (this.infoDropped > 0) {
+    for (const level of ['info', 'warn'] as const) {
+      if (this.dropped[level] === 0) continue
       this.queue.push({
         t: new Date().toISOString(),
         level: 'warn',
         scope: 'run-log',
-        message: `${this.infoDropped} info lines were not kept: a run keeps at most ${this.maxInfo}`,
+        message: `${this.dropped[level]} ${level} lines were not kept: a run keeps at most ${this.max[level]}`,
       })
-      this.infoDropped = 0
+      this.dropped[level] = 0
     }
     await this.send()
   }

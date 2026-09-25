@@ -79,6 +79,25 @@ describe('RunLogShipper', () => {
     expect(sent.at(-1)?.level).toBe('warn')
   })
 
+  // A shop refusing every page writes a warning per page, and a night of that
+  // must not fill a free-plan database either. Errors are never capped.
+  it('caps warnings too, much higher, and never errors', async () => {
+    const db = fakeDb()
+    const shipper = new RunLogShipper(db, { maxWarn: 1 })
+    shipper.attach('run-1')
+    shipper.push(line('w1', 'warn'))
+    shipper.push(line('w2', 'warn'))
+    shipper.push(line('e1', 'error'))
+    shipper.push(line('e2', 'error'))
+    await shipper.close()
+    expect(db.calls.flatMap((c) => c.args.p_lines).map((l) => l.message)).toEqual([
+      'w1',
+      'e1',
+      'e2',
+      '1 warn lines were not kept: a run keeps at most 1',
+    ])
+  })
+
   it('retries a failed batch once, then drops it without throwing', async () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
     const db = fakeDb(2)

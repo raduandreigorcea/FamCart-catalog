@@ -8,8 +8,9 @@
 --
 -- So the scraper ships every line of its log here as well (importer/runLog.ts),
 -- two seconds or a hundred lines at a time, and the admin's run page reads it
--- live through Realtime. At most 5,000 info lines a run, enforced by the
--- scraper; warn and error are always kept. Trimmed after 30 days by pg_cron.
+-- live through Realtime. At most 5,000 info and 20,000 warn lines a run,
+-- enforced by the scraper; errors are always kept. Trimmed after 30 days by
+-- pg_cron.
 
 create table if not exists public.catalog_run_logs (
   id      bigint generated always as identity primary key,
@@ -150,7 +151,17 @@ begin
        and case p_kind
              when 'new' then l.first_seen_at = v_run.started_at
              when 'repriced' then l.last_price_at = v_run.started_at and l.first_seen_at <> v_run.started_at
-             else v_run.status = 'completed' and not l.available and l.last_seen_at < v_run.started_at
+             -- Seen last by the shop's PREVIOUS completed run: anything older
+             -- was that run's sweep, not this one's, and without the floor a
+             -- listing swept in June would be listed under every run since.
+             else v_run.status = 'completed' and not l.available
+                  and l.last_seen_at < v_run.started_at
+                  and l.last_seen_at >= coalesce((
+                    select max(p.started_at) from public.catalog_scrape_runs p
+                     where p.retailer_id = v_run.retailer_id
+                       and p.status = 'completed'
+                       and p.started_at < v_run.started_at
+                  ), '-infinity'::timestamptz)
            end
      order by l.retailer_name, l.external_id
      limit least(greatest(coalesce(p_limit, 50), 1), 200)
