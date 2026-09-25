@@ -119,6 +119,14 @@ describe('ScrapeRun', () => {
     expect(run.totals.valid).toBe(2)
   })
 
+  it('names its run once opened, so the log shipper can attach to it', async () => {
+    const { db } = fakeDb(OPEN)
+    const run = new ScrapeRun(db, 'lidl', testLogger())
+    expect(run.id).toBeNull()
+    await run.open()
+    expect(run.id).toBe('run-1')
+  })
+
   it('sends the run id with every import, so rows carry the watermark', async () => {
     const { db, calls } = fakeDb({ ...OPEN, catalog_import_listings: {}, catalog_run_complete: {} })
     const run = new ScrapeRun(db, 'auchan', testLogger())

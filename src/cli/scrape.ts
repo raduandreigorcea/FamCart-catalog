@@ -15,6 +15,7 @@ import process from 'node:process'
 import { createLogger } from '../core/logger.ts'
 import { SCRAPERS, scraperFor, IMPLEMENTED } from '../core/registry.ts'
 import { ScrapeRun, connect, BATCH_SIZE, watchLiveness } from '../importer/run.ts'
+import { RunLogShipper } from '../importer/runLog.ts'
 import type { RunProgress } from '../importer/run.ts'
 import type { CatalogDb } from '../importer/run.ts'
 import type { RetailerScraper } from '../core/types.ts'
@@ -113,7 +114,11 @@ async function scrapeOne(
   db: CatalogDb | null,
   args: Args,
 ): Promise<boolean> {
-  const log = createLogger(scraper.retailer, args.quiet)
+  // Every line also goes to the catalog, so the admin's run page can show it
+  // live (importer/runLog.ts). Not on a dry run, which has no run row to file
+  // it under.
+  const shipper = db && !args.dryRun ? new RunLogShipper(db) : null
+  const log = createLogger(scraper.retailer, args.quiet, shipper ? (line) => shipper.push(line) : undefined)
 
   if (!scraper.implemented) {
     // Named, not skipped. A retailer that cannot be read is a fact about the
@@ -174,6 +179,7 @@ async function scrapeOne(
 
   try {
     await run.open()
+    if (run.id) shipper?.attach(run.id)
     stopLiveness = watchLiveness(run, 60_000, () => progress)
 
     let sinceLastBeat = 0
@@ -309,6 +315,8 @@ async function scrapeOne(
     // Only still set if something above threw before it could be stopped; the
     // timer must not outlive the run either way.
     void stopLiveness?.()
+    // Last, after the closing lines ("run completed", "done") have been written.
+    await shipper?.close()
     process.off('SIGINT', onSignal)
     process.off('SIGTERM', onSignal)
   }
