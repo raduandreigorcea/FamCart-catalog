@@ -5,6 +5,9 @@
 
 import { describe, it, expect } from 'vitest'
 import { HttpClient, CircuitOpenError, onEveryResponse } from '../src/core/http.ts'
+import { crawlProductPages } from '../src/core/pageCrawl.ts'
+import type { ScrapeContext } from '../src/core/types.ts'
+import { testLogger } from './helpers.ts'
 
 /** A fetch that answers from a script, recording what it was asked. */
 function scriptedFetch(script: Array<number | Error>): {
@@ -286,5 +289,46 @@ describe('the header limit', () => {
     for (const [name, cmd] of scrapes) {
       expect(cmd, name).toMatch(/--max-http-header-size=\d{5,}/)
     }
+  })
+})
+
+// A crawl meets a slow minute at the shop long before it meets the end of it.
+// Lidl DE and MPreis each died on one bad page when the breaker opened; the
+// crawl now waits the cooldown out and carries on.
+describe('a crawl whose circuit opens', () => {
+  const sitemap = `<urlset>${Array.from({ length: 20 }, (_, i) => `<url><loc>https://shop.test/p${i + 1}</loc></url>`).join('')}</urlset>`
+
+  async function crawl(pageFailures: number) {
+    let failures = pageFailures
+    const pages: string[] = []
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/sitemap.xml')) return new Response(sitemap)
+      if (failures-- > 0) throw new Error('connection reset')
+      pages.push(url)
+      return new Response('<html></html>')
+    }) as unknown as typeof fetch
+    const clock = fakeClock()
+    const http = new HttpClient({ fetchImpl: impl, minIntervalMs: 0, ...clock })
+    const reasons: string[] = []
+    const ctx = { log: testLogger(), reportIncomplete: (r: string) => void reasons.push(r) } as unknown as ScrapeContext
+    for await (const _ of crawlProductPages({
+      retailer: 'shop', http, ctx, sitemapUrls: ['https://shop.test/sitemap.xml'],
+      build: () => null, supportsIncremental: false,
+    })) { /* no products: the pages are empty */ }
+    return { pages, reasons }
+  }
+
+  it('pauses for the cooldown and reads the rest of the shop', async () => {
+    // p1 spends all three attempts; p2's first opens the circuit.
+    const { pages, reasons } = await crawl(4)
+    expect(pages.length).toBe(19)
+    expect(pages[0]).toBe('https://shop.test/p2')
+    expect(reasons).toEqual([])
+  })
+
+  it('still ends a crawl the shop keeps refusing', async () => {
+    const { reasons } = await crawl(Infinity)
+    expect(reasons.some((r) => r.includes('circuit'))).toBe(true)
   })
 })

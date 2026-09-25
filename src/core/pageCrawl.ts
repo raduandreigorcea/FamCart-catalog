@@ -67,6 +67,9 @@ export interface PageCrawlOptions {
   supportsIncremental: boolean
 }
 
+/** Circuit trips in a row, with no page answering between them, that end a crawl. */
+const CIRCUIT_TRIPS_TO_END = 5
+
 export interface CrawlCounters {
   [key: string]: number
   urls: number
@@ -183,6 +186,26 @@ export async function* crawlProductPages(
     // arguments and handles it there, exactly as it already does for --limit.
   }
 
+  // A circuit that opens is a PAUSE, not the end of the crawl. It trips on four
+  // failures in a row, which a three-hour crawl meets from a single slow minute
+  // at the shop: Lidl DE died at 10,592 of 13,453 pages and MPreis at 676 of
+  // 12,824, each after exactly one page had failed. So wait out the cooldown and
+  // ask again; only a shop that keeps refusing through every pause ends the run.
+  let trips = 0
+  const fetchPage = async (url: string) => {
+    for (;;) {
+      try {
+        const response = await http.get(url)
+        trips = 0
+        return response
+      } catch (error) {
+        if (!(error instanceof CircuitOpenError) || ++trips >= CIRCUIT_TRIPS_TO_END) throw error
+        ctx.log.warn(`${retailer}: circuit open, pausing`, { trip: trips, reason: error.message })
+        await http.waitOutCircuit(url)
+      }
+    }
+  }
+
   let emitted = 0
   // Refused by URL and never fetched: accounted for, so part of coverage.
   let unread = 0
@@ -204,13 +227,13 @@ export async function* crawlProductPages(
 
     let response
     try {
-      response = await http.get(entry.loc)
+      response = await fetchPage(entry.loc)
     } catch (error) {
       if (error instanceof CircuitOpenError) {
         // Stop the generator rather than throwing. What has been imported stays
         // imported; the run closes short of its previous count and the sanity
         // floor in catalog_run_complete refuses to sweep on the strength of it.
-        ctx.log.error(`${retailer}: circuit open, ending the crawl early`, counters)
+        ctx.log.error(`${retailer}: circuit open, ending the crawl early`, { ...counters, reason: error.message })
         ctx.reportIncomplete?.(
           `circuit opened after ${counters.fetched} of ${counters.urls} pages`,
         )
