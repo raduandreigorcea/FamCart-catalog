@@ -101,6 +101,11 @@ export function connect(env: Record<string, string | undefined> = process.env): 
 export class ScrapeRun {
   private runId: string | null = null
   private buffer: ImportRow[] = []
+
+  /** The run's id once open() has succeeded; null before, and on a dry run. */
+  get id(): string | null {
+    return this.runId
+  }
   readonly totals = emptyTotals()
 
   private readonly db: CatalogDb
